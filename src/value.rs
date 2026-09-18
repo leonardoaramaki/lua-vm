@@ -1,5 +1,7 @@
 use core::panic;
-use std::fmt;
+use std::{fmt, rc::Rc};
+
+use crate::proto::Proto;
 
 #[derive(Debug, Clone)]
 pub enum LuaValue {
@@ -8,6 +10,7 @@ pub enum LuaValue {
     Number(f64),
     String(String),
     Function(fn(&[LuaValue])),
+    LuaFunction(Rc<Proto>),
 }
 
 impl LuaValue {
@@ -27,6 +30,18 @@ impl PartialEq for LuaValue {
             (LuaValue::Boolean(a), LuaValue::Boolean(b)) => a == b,
             (LuaValue::Nil, LuaValue::Nil) => true,
             _ => panic!("Incompatible types: {}, {}", self, other),
+        }
+    }
+}
+
+impl PartialOrd for LuaValue {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match (self, other) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => a.partial_cmp(b),
+
+            (LuaValue::String(a), LuaValue::String(b)) => a.partial_cmp(b),
+
+            _ => None,
         }
     }
 }

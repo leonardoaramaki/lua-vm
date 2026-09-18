@@ -1,4 +1,4 @@
-use crate::value::LuaValue;
+use crate::{proto::Proto, value::LuaValue};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 /// env is where the globals table lives (G_)
@@ -13,21 +13,21 @@ impl Env {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct LuaClosure {
     pub pc: i32,
-    pub chunk_index: usize,
+    pub proto: Rc<Proto>,
     pub env: Rc<RefCell<Env>>,
-    pub constants: Vec<LuaValue>,
+    pub base: usize,
 }
 
 impl LuaClosure {
-    pub fn new(chunk_index: usize) -> Self {
+    pub fn new(proto: Rc<Proto>) -> Self {
         Self {
             pc: 0,
-            chunk_index,
+            proto,
             env: Rc::new(RefCell::new(Env::default())),
-            constants: Vec::new(),
+            base: 0,
         }
     }
 }

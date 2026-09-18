@@ -1,12 +1,7 @@
-use crate::closure::Env;
-use crate::closure::LuaClosure;
+use crate::closure::{Env, LuaClosure};
+use crate::proto::*;
 use crate::value::LuaValue;
 use std::{cell::RefCell, collections::VecDeque, rc::Rc};
-
-#[derive(Debug)]
-pub struct Proto {
-    bytecode: Vec<u32>,
-}
 
 pub type A = u8;
 pub type B = u32;
@@ -19,9 +14,11 @@ pub enum Instruction {
     Add(A, B, C),
     Call(A, B, C),
     Concat(A, B, C),
+    Closure(A, Bx),
     Eq(A, B, C),
     GetGlobal(A, Bx),
     Jmp(SBx),
+    Lt(A, B, C),
     LoadBool(A, B, C),
     Loadk(A, Bx),
     Move(A, Bx),
@@ -33,7 +30,7 @@ pub enum Instruction {
 #[derive(Debug)]
 pub struct LuaVM {
     pub callstack: VecDeque<LuaClosure>,
-    pub protos: Vec<Proto>,
+    pub protos: Vec<Rc<Proto>>,
     pub env: Rc<RefCell<Env>>,
     pub stack: VecDeque<LuaValue>,
 }
@@ -48,22 +45,17 @@ impl LuaVM {
         }
     }
 
-    pub fn load_chunk(&mut self, bytecode: Vec<u32>) {
-        let chunk = Proto { bytecode };
-        // Proto is moved here and LuaVM is now its owner
-        self.protos.push(chunk);
-        self.callstack
-            .push_back(LuaClosure::new(self.callstack.len()));
+    pub fn load_proto(&mut self, proto: Proto) {
+        let proto = Rc::new(proto);
+        self.protos.push(proto.clone());
+        self.callstack.push_back(LuaClosure::new(proto));
     }
 
     pub fn fetch(&mut self) -> u32 {
-        // Read next 4 bytes from PC and increment PC.
-        // PC should be in a closure which is an instance of
-        let closure = &mut self.callstack[0];
-        let chunk = &self.protos[closure.chunk_index];
+        let closure = self.callstack.front_mut().unwrap();
         let pc = closure.pc;
         closure.pc += 1;
-        chunk.bytecode[pc as usize]
+        closure.proto.bytecode()[pc as usize]
     }
 
     pub fn decode(&self, instruction: u32) -> Instruction {
@@ -84,17 +76,18 @@ impl LuaVM {
             21 => Instruction::Concat(a, b, c),
             22 => Instruction::Jmp(sbx),
             23 => Instruction::Eq(a, b, c),
+            24 => Instruction::Lt(a, b, c),
             28 => Instruction::Call(a, b, c),
             29 => Instruction::TailCall(a, b, c),
             30 => Instruction::Return(a, b),
+            36 => Instruction::Closure(a, bx),
             _ => unimplemented!("{}", opcode),
         }
     }
 
     pub fn execute(&mut self, instruction: Instruction) {
         let closure = self.callstack.front_mut().unwrap();
-        // FIXME: Here base is 0, but we should pick this up from somewhere else...
-        let base: usize = 0;
+        let base: usize = closure.base;
         match instruction {
             Instruction::Move(a, b) => {
                 // R(A) := R(B)
@@ -124,6 +117,11 @@ impl LuaVM {
                 } else {
                     panic!("TAILCALL: R(A) is not a function");
                 }
+            }
+            Instruction::Closure(a, bx) => {
+                // Bx is the function number of the function to be instantiated in the table of function prototypes
+                let proto = closure.proto.protos().get(bx as usize).unwrap();
+                self.stack[base + a as usize] = LuaValue::LuaFunction(proto.clone());
             }
             Instruction::Concat(a, b, c) => {
                 // R(A) := R(B) .... R(C)
@@ -156,18 +154,36 @@ impl LuaVM {
             }
             Instruction::GetGlobal(a, bx) => {
                 // R(A) := Glb(Kst(Bx))
-                if let LuaValue::String(key) = closure.constants[bx as usize].clone() {
+                if let LuaValue::String(key) = closure.proto.constants()[bx as usize].clone() {
                     self.stack[base + a as usize] = self
                         .env
                         .borrow_mut()
                         .globals
                         .get(&key)
-                        .expect("{key} is not a valid global")
+                        .expect("not a valid global")
                         .clone();
                 }
             }
             Instruction::Jmp(sbx) => {
                 closure.pc += sbx;
+            }
+            Instruction::Lt(a, b, c) => {
+                // if ((RK(B) == RK(C)) ~= A) then PC++
+                let b = if b < 256 {
+                    self.stack[base + b as usize].clone()
+                } else {
+                    unimplemented!("FIXME: B is a constant: can't EQ constants")
+                };
+                let c = if c < 256 {
+                    self.stack[base + c as usize].clone()
+                } else {
+                    unimplemented!("FIXME: C is a constant: can't EQ constants")
+                };
+                // Determine should skip next instruction
+                let skip_next = (b < c) == (a != 1);
+                if skip_next {
+                    closure.pc += 1;
+                }
             }
             Instruction::LoadBool(a, b, c) => {
                 // R(A) := (Bool)B; if (C) PC++
@@ -178,25 +194,30 @@ impl LuaVM {
             }
             Instruction::Loadk(a, bx) => {
                 // R(A) := Kst(Bx)
-                self.stack[base + a as usize] = closure.constants[bx as usize].clone();
+                self.stack[base + a as usize] = closure.proto.constants()[bx as usize].clone();
             }
-            Instruction::TailCall(a, b, _c) => {
-                if let LuaValue::Function(function) = self.stack[base + a as usize].clone() {
+            Instruction::TailCall(a, b, _c) => match self.stack[base + a as usize].clone() {
+                LuaValue::Function(function) => {
                     let mut args = vec![];
                     for i in 1..=(b - 1) {
                         args.push(self.stack[base + a as usize + i as usize].clone())
                     }
                     function(&args);
-                } else {
-                    panic!("TAILCALL: R(A) is not a function");
                 }
-            }
+                LuaValue::LuaFunction(function) => {
+                    let mut closure = LuaClosure::new(function.clone());
+                    closure.env = self.env.clone();
+                    closure.base = base + a as usize + 1;
+                    self.callstack.push_front(closure);
+                }
+                _ => panic!("TAILCALL: R(A) is not a valid function"),
+            },
             Instruction::Return(_a, _b) => {
                 self.callstack.pop_front();
             }
             Instruction::SetGlobal(a, bx) => {
                 let ra = self.stack[base + a as usize].clone();
-                let k = closure.constants[bx as usize].clone();
+                let k = closure.proto.constants()[bx as usize].clone();
                 self.env.borrow_mut().insert_global(&String::from(k), ra);
             }
         }
