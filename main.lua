@@ -1,5 +1,2 @@
-function imprime(msg)
-    print(msg)
-end
-
-imprime("Olá Leo")
+tbl = { 10, 20, 30 }
+print(tbl[2])

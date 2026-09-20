@@ -1,5 +1,9 @@
 use core::panic;
-use std::{fmt, rc::Rc};
+use std::{
+    cell::RefCell,
+    fmt::{self},
+    rc::Rc,
+};
 
 use crate::proto::Proto;
 
@@ -11,6 +15,7 @@ pub enum LuaValue {
     String(String),
     Function(fn(&[LuaValue])),
     LuaFunction(Rc<Proto>),
+    Table(Rc<RefCell<Vec<LuaValue>>>),
 }
 
 impl LuaValue {
@@ -65,6 +70,10 @@ impl fmt::Display for LuaValue {
             LuaValue::Boolean(value) => write!(f, "{}", value),
             LuaValue::Number(value) => write!(f, "{}", value),
             LuaValue::String(value) => write!(f, "{}", value),
+            LuaValue::Table(_content) => {
+                let a = self as *const LuaValue;
+                write!(f, "table: {:p}", a)
+            }
             _ => unimplemented!("Function can't be printed out"),
         }
     }
