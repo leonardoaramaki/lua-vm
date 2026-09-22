@@ -2,6 +2,7 @@ use core::panic;
 use std::{
     cell::RefCell,
     fmt::{self},
+    ops::Sub,
     rc::Rc,
 };
 
@@ -75,6 +76,16 @@ impl fmt::Display for LuaValue {
                 write!(f, "table: {:p}", a)
             }
             _ => unimplemented!("Function can't be printed out"),
+        }
+    }
+}
+
+impl Sub for LuaValue {
+    type Output = LuaValue;
+    fn sub(self, rhs: Self) -> LuaValue {
+        match (self, rhs) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a - b),
+            _ => unimplemented!("Cannot subtract incompatible types"),
         }
     }
 }

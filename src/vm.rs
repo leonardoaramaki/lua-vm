@@ -28,6 +28,7 @@ pub enum Instruction {
     Return(A, Bx),
     SetGlobal(A, Bx),
     SetList(A, B, C),
+    Sub(A, B, C),
     TailCall(A, B, C),
 }
 
@@ -106,6 +107,7 @@ impl LuaVM {
             7 => Instruction::SetGlobal(a, bx),
             10 => Instruction::NewTable(a, b, c),
             12 => Instruction::Add(a, b, c),
+            13 => Instruction::Sub(a, b, c),
             21 => Instruction::Concat(a, b, c),
             22 => Instruction::Jmp(sbx),
             23 => Instruction::Eq(a, b, c),
@@ -289,6 +291,20 @@ impl LuaVM {
                 } else {
                     unimplemented!("SETLIST: Variable number of arguments");
                 }
+            }
+            Instruction::Sub(a, b, c) => {
+                // R(A) := RK(B) + RK(C)
+                let b = if b < 256 {
+                    self.get_reg(b)
+                } else {
+                    unimplemented!("FIXME: adding constants not implemented")
+                };
+                let c = if c < 256 {
+                    self.get_reg(c)
+                } else {
+                    unimplemented!("FIXME: adding constants not implemented")
+                };
+                self.set_reg(a, b - c);
             }
         }
     }
