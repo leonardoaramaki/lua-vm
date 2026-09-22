@@ -1,7 +1,6 @@
 use crate::closure::{Env, LuaClosure};
 use crate::proto::*;
 use crate::value::LuaValue;
-use std::usize;
 use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
 pub type A = u8;
@@ -16,6 +15,7 @@ pub enum Instruction {
     Call(A, B, C),
     Concat(A, B, C),
     Closure(A, Bx),
+    Div(A, B, C),
     Eq(A, B, C),
     GetGlobal(A, Bx),
     GetTable(A, B, C),
@@ -24,6 +24,7 @@ pub enum Instruction {
     LoadBool(A, B, C),
     Loadk(A, Bx),
     Move(A, Bx),
+    Mul(A, B, C),
     NewTable(A, B, C),
     Return(A, Bx),
     SetGlobal(A, Bx),
@@ -108,6 +109,8 @@ impl LuaVM {
             10 => Instruction::NewTable(a, b, c),
             12 => Instruction::Add(a, b, c),
             13 => Instruction::Sub(a, b, c),
+            14 => Instruction::Mul(a, b, c),
+            15 => Instruction::Div(a, b, c),
             21 => Instruction::Concat(a, b, c),
             22 => Instruction::Jmp(sbx),
             23 => Instruction::Eq(a, b, c),
@@ -169,6 +172,20 @@ impl LuaVM {
                     }
                 }
                 self.set_reg(a, LuaValue::String(result));
+            }
+            Instruction::Div(a, b, c) => {
+                // R(A) := RK(B) / RK(C)
+                let b = if b < 256 {
+                    self.get_reg(b)
+                } else {
+                    unimplemented!("FIXME: adding constants not implemented")
+                };
+                let c = if c < 256 {
+                    self.get_reg(c)
+                } else {
+                    unimplemented!("FIXME: adding constants not implemented")
+                };
+                self.set_reg(a, b / c);
             }
             Instruction::Eq(a, b, c) => {
                 // if ((RK(B) == RK(C)) ~= A) then PC++
@@ -248,6 +265,20 @@ impl LuaVM {
             Instruction::Loadk(a, bx) => {
                 // R(A) := Kst(Bx)
                 self.set_reg(a, self.get_closure().proto.constants()[bx as usize].clone());
+            }
+            Instruction::Mul(a, b, c) => {
+                // R(A) := RK(B) * RK(C)
+                let b = if b < 256 {
+                    self.get_reg(b)
+                } else {
+                    unimplemented!("FIXME: adding constants not implemented")
+                };
+                let c = if c < 256 {
+                    self.get_reg(c)
+                } else {
+                    unimplemented!("FIXME: adding constants not implemented")
+                };
+                self.set_reg(a, b * c);
             }
             Instruction::NewTable(a, b, c) => {
                 self.set_reg(a, LuaValue::Table(Rc::new(RefCell::from(vec![]))));

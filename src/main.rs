@@ -17,11 +17,11 @@ fn print(args: &[LuaValue]) {
 fn main() {
     // a = 10
     // b = 4
-    // print(a - b)
+    // print(a * b)
     let main_bytecode: Vec<u32> = vec![
         0x00000001, // PC 0: LOADK     R0, K0      ; R0 = 10
         0x00004041, // PC 1: LOADK     R1, K1      ; R1 = 4
-        0x0000408D, // PC 2: SUB       R2, R0, R1  ; R2 = R0 - R1 = 10 - 4 = 6
+        0x0000408E, // PC 2: MUL       R2, R0, R1  ; R2 = R0 * R1 = 10 * 4 = 40
         0x000080C5, // PC 3: GETGLOBAL R3, K2      ; R3 = print
         0x01000100, // PC 4: MOVE      R4, R2      ; R4 = R2
         0x010040DD, // PC 5: TAILCALL  R3, 2, 1    ; print(R4)
