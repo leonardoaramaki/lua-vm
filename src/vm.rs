@@ -20,6 +20,7 @@ pub enum Instruction {
     GetGlobal(A, Bx),
     GetTable(A, B, C),
     Jmp(SBx),
+    Len(A, B),
     Lt(A, B, C),
     LoadBool(A, B, C),
     Loadk(A, Bx),
@@ -27,6 +28,7 @@ pub enum Instruction {
     Move(A, Bx),
     Mul(A, B, C),
     NewTable(A, B, C),
+    Not(A, B),
     Pow(A, B, C),
     Return(A, Bx),
     SetGlobal(A, Bx),
@@ -117,6 +119,8 @@ impl LuaVM {
             16 => Instruction::Mod(a, b, c),
             17 => Instruction::Pow(a, b, c),
             18 => Instruction::Unm(a, b),
+            19 => Instruction::Not(a, b),
+            20 => Instruction::Len(a, b),
             21 => Instruction::Concat(a, b, c),
             22 => Instruction::Jmp(sbx),
             23 => Instruction::Eq(a, b, c),
@@ -243,6 +247,15 @@ impl LuaVM {
             Instruction::Jmp(sbx) => {
                 self.get_closure_mut().pc += sbx;
             }
+            Instruction::Len(a, b) => {
+                let b = self.get_reg(b);
+                let l = match b {
+                    LuaValue::String(s) => s.len(),
+                    LuaValue::Table(c) => c.borrow().len(),
+                    _ => unimplemented!(),
+                };
+                self.set_reg(a, LuaValue::Number(l as f64));
+            }
             Instruction::Lt(a, b, c) => {
                 // if ((RK(B) == RK(C)) ~= A) then PC++
                 let b = if b < 256 {
@@ -302,6 +315,11 @@ impl LuaVM {
             }
             Instruction::NewTable(a, b, c) => {
                 self.set_reg(a, LuaValue::Table(Rc::new(RefCell::from(vec![]))));
+            }
+            Instruction::Not(a, b) => {
+                if let LuaValue::Boolean(b) = self.get_reg(b) {
+                    self.set_reg(a, !LuaValue::Boolean(b));
+                }
             }
             Instruction::Pow(a, b, c) => {
                 // R(A) := RK(B) + RK(C)

@@ -24,6 +24,8 @@ fn main() {
     // print(a % b) --> 2
     // print(a ^ b) --> 10000
     // print(-a)    --> -10
+    // print(not true) --> false
+    // print(#"hello") --> 5
     let main_bytecode: Vec<u32> = vec![
         0x00000001, // PC 0:  LOADK     R0, K0      ; R0 = 10
         0x00004041, // PC 1:  LOADK     R1, K1      ; R1 = 4
@@ -55,7 +57,17 @@ fn main() {
         0x00008245, // PC 27: GETGLOBAL R9, K2      ; R9 = print
         0x04000280, // PC 28: MOVE      R10, R8     ; R10 = R8 (-10)
         0x0100425C, // PC 29: CALL      R9, 2, 1    ; print(R10) -> -10
-        0x0000401E, // PC 30: RETURN    R0, 1
+        0x008002C2, // PC 30: LOADBOOL  R11, 1, 0   ; R11 = true
+        0x05800313, // PC 31: NOT       R12, R11    ; R12 = not R11 = false
+        0x00008245, // PC 32: GETGLOBAL R9, K2      ; R9 = print
+        0x06000280, // PC 33: MOVE      R10, R12    ; R10 = R12 (false)
+        0x0100425C, // PC 34: CALL      R9, 2, 1    ; print(R10) -> false
+        0x0000C341, // PC 35: LOADK     R13, K3     ; R13 = "hello"
+        0x06800394, // PC 36: LEN       R14, R13    ; R14 = #R13 = 5
+        0x00008245, // PC 37: GETGLOBAL R9, K2      ; R9 = print
+        0x07000280, // PC 38: MOVE      R10, R14    ; R10 = R14 (5)
+        0x0100425C, // PC 39: CALL      R9, 2, 1    ; print(R10) -> 5
+        0x0000401E, // PC 40: RETURN    R0, 1
     ];
 
     let mut vm = LuaVM::new();
@@ -66,6 +78,7 @@ fn main() {
         LuaValue::Number(10.0),                  // K0
         LuaValue::Number(4.0),                   // K1
         LuaValue::String(String::from("print")), // K2
+        LuaValue::String(String::from("hello")), // K3
     ];
     let proto = Proto::new(main_bytecode, main_constants, vec![]);
     vm.load_proto(proto);
