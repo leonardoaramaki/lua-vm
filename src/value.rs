@@ -2,7 +2,7 @@ use core::panic;
 use std::{
     cell::RefCell,
     fmt::{self},
-    ops::{Div, Mul, Sub},
+    ops::{Div, Mul, Rem, Sub},
     rc::Rc,
 };
 
@@ -24,6 +24,13 @@ impl LuaValue {
         match (a, b) {
             (&LuaValue::Number(n1), &LuaValue::Number(n2)) => LuaValue::Number(n1 + n2),
             _ => unimplemented!("cannot sum {} and {}", a.clone(), b.clone()),
+        }
+    }
+
+    pub fn pow(&self, rhs: Self) -> LuaValue {
+        match (self, rhs) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a.powf(b)),
+            _ => unimplemented!("Incompatible types"),
         }
     }
 }
@@ -105,6 +112,15 @@ impl Mul for LuaValue {
     fn mul(self, rhs: Self) -> LuaValue {
         match (self, rhs) {
             (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a * b),
+            _ => unimplemented!("Cannot subtract incompatible types"),
+        }
+    }
+}
+impl Rem for LuaValue {
+    type Output = LuaValue;
+    fn rem(self, rhs: Self) -> LuaValue {
+        match (self, rhs) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a % b),
             _ => unimplemented!("Cannot subtract incompatible types"),
         }
     }

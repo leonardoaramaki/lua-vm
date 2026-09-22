@@ -23,14 +23,17 @@ pub enum Instruction {
     Lt(A, B, C),
     LoadBool(A, B, C),
     Loadk(A, Bx),
+    Mod(A, B, C),
     Move(A, Bx),
     Mul(A, B, C),
     NewTable(A, B, C),
+    Pow(A, B, C),
     Return(A, Bx),
     SetGlobal(A, Bx),
     SetList(A, B, C),
     Sub(A, B, C),
     TailCall(A, B, C),
+    Unm(A, B),
 }
 
 #[derive(Debug)]
@@ -111,6 +114,9 @@ impl LuaVM {
             13 => Instruction::Sub(a, b, c),
             14 => Instruction::Mul(a, b, c),
             15 => Instruction::Div(a, b, c),
+            16 => Instruction::Mod(a, b, c),
+            17 => Instruction::Pow(a, b, c),
+            18 => Instruction::Unm(a, b),
             21 => Instruction::Concat(a, b, c),
             22 => Instruction::Jmp(sbx),
             23 => Instruction::Eq(a, b, c),
@@ -280,8 +286,36 @@ impl LuaVM {
                 };
                 self.set_reg(a, b * c);
             }
+            Instruction::Mod(a, b, c) => {
+                // R(A) := RK(B) + RK(C)
+                let b = if b < 256 {
+                    self.get_reg(b)
+                } else {
+                    unimplemented!("FIXME: adding constants not implemented")
+                };
+                let c = if c < 256 {
+                    self.get_reg(c)
+                } else {
+                    unimplemented!("FIXME: adding constants not implemented")
+                };
+                self.set_reg(a, b % c);
+            }
             Instruction::NewTable(a, b, c) => {
                 self.set_reg(a, LuaValue::Table(Rc::new(RefCell::from(vec![]))));
+            }
+            Instruction::Pow(a, b, c) => {
+                // R(A) := RK(B) + RK(C)
+                let b = if b < 256 {
+                    self.get_reg(b)
+                } else {
+                    unimplemented!("FIXME: adding constants not implemented")
+                };
+                let c = if c < 256 {
+                    self.get_reg(c)
+                } else {
+                    unimplemented!("FIXME: adding constants not implemented")
+                };
+                self.set_reg(a, b.pow(c));
             }
             Instruction::TailCall(a, b, _c) => {
                 let base = self.get_closure().base;
@@ -324,7 +358,7 @@ impl LuaVM {
                 }
             }
             Instruction::Sub(a, b, c) => {
-                // R(A) := RK(B) + RK(C)
+                // R(A) := RK(B) - RK(C)
                 let b = if b < 256 {
                     self.get_reg(b)
                 } else {
@@ -336,6 +370,10 @@ impl LuaVM {
                     unimplemented!("FIXME: adding constants not implemented")
                 };
                 self.set_reg(a, b - c);
+            }
+            Instruction::Unm(a, b) => {
+                let b = self.get_reg(b);
+                self.set_reg(a, b * LuaValue::Number(-1.0));
             }
         }
     }
