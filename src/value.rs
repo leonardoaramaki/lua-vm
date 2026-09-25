@@ -1,7 +1,9 @@
 use core::panic;
 use std::{
     cell::RefCell,
+    collections::HashMap,
     fmt::{self},
+    hash::Hash,
     ops::{Div, Mul, Not, Rem, Sub},
     rc::Rc,
 };
@@ -16,7 +18,10 @@ pub enum LuaValue {
     String(String),
     Function(fn(&[LuaValue])),
     LuaFunction(Rc<Proto>),
-    Table(Rc<RefCell<Vec<LuaValue>>>),
+    Table(
+        Rc<RefCell<Vec<LuaValue>>>,
+        Rc<RefCell<HashMap<LuaValue, LuaValue>>>,
+    ),
 }
 
 impl LuaValue {
@@ -78,7 +83,7 @@ impl fmt::Display for LuaValue {
             LuaValue::Boolean(value) => write!(f, "{}", value),
             LuaValue::Number(value) => write!(f, "{}", value),
             LuaValue::String(value) => write!(f, "{}", value),
-            LuaValue::Table(_content) => {
+            LuaValue::Table(_v, _h) => {
                 let a = self as *const LuaValue;
                 write!(f, "table: {:p}", a)
             }
@@ -136,3 +141,15 @@ impl Not for LuaValue {
         }
     }
 }
+
+impl Hash for LuaValue {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            LuaValue::Number(n) => n.to_bits().hash(state),
+            LuaValue::String(s) => s.hash(state),
+            _ => unimplemented!(),
+        }
+    }
+}
+
+impl Eq for LuaValue {}

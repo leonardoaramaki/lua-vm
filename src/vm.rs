@@ -1,6 +1,7 @@
 use crate::closure::{Env, LuaClosure};
 use crate::proto::*;
 use crate::value::LuaValue;
+use std::collections::HashMap;
 use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
 pub type A = u8;
@@ -33,6 +34,7 @@ pub enum Instruction {
     Return(A, Bx),
     SetGlobal(A, Bx),
     SetList(A, B, C),
+    SetTable(A, B, C),
     Sub(A, B, C),
     TailCall(A, B, C),
     Unm(A, B),
@@ -111,6 +113,7 @@ impl LuaVM {
             5 => Instruction::GetGlobal(a, bx),
             6 => Instruction::GetTable(a, b, c),
             7 => Instruction::SetGlobal(a, bx),
+            9 => Instruction::SetTable(a, b, c),
             10 => Instruction::NewTable(a, b, c),
             12 => Instruction::Add(a, b, c),
             13 => Instruction::Sub(a, b, c),
@@ -132,6 +135,10 @@ impl LuaVM {
             36 => Instruction::Closure(a, bx),
             _ => unimplemented!("{}", opcode),
         }
+    }
+
+    fn decode_fpb(fpb: u32) -> (u32, u32) {
+        ((fpb >> 3) & 0x1F, (fpb & 0b00000111))
     }
 
     pub fn execute(&mut self, instruction: Instruction) {
@@ -231,16 +238,31 @@ impl LuaVM {
                 }
             }
             Instruction::GetTable(a, b, c) => {
-                if let LuaValue::Table(content) = self.get_reg(b) {
+                if let LuaValue::Table(_, h) = self.get_reg(b) {
                     let c = if c < 256 {
                         self.get_reg(c)
                     } else {
                         let constants = self.get_closure().proto.constants();
-                        constants[c as usize].clone()
+                        constants[c as usize % 256].clone()
                     };
-                    if let LuaValue::Number(n) = c {
-                        let v = content.borrow();
-                        self.set_reg(a, v[(n as usize) - 1].clone());
+
+                    // C is the key, so check which type is it
+                    match c {
+                        LuaValue::Number(n) => {
+                            // Assert that B is a table and get that
+                            if let LuaValue::Table(v, h) = self.get_reg(b) {
+                                // Return from the array if within bounds otherwise return from the
+                                // map
+                                if n >= 1.0 && n < v.borrow().len() as f64 {
+                                    self.set_reg(a, v.borrow()[n as usize].clone());
+                                } else {
+                                    self.set_reg(a, h.borrow()[&c].clone());
+                                }
+                            }
+                        }
+                        _ => {
+                            self.set_reg(a, h.borrow()[&c].clone());
+                        }
                     }
                 }
             }
@@ -251,7 +273,7 @@ impl LuaVM {
                 let b = self.get_reg(b);
                 let l = match b {
                     LuaValue::String(s) => s.len(),
-                    LuaValue::Table(c) => c.borrow().len(),
+                    LuaValue::Table(v, _h) => v.borrow().len(),
                     _ => unimplemented!(),
                 };
                 self.set_reg(a, LuaValue::Number(l as f64));
@@ -314,7 +336,27 @@ impl LuaVM {
                 self.set_reg(a, b % c);
             }
             Instruction::NewTable(a, b, c) => {
-                self.set_reg(a, LuaValue::Table(Rc::new(RefCell::from(vec![]))));
+                let (be, bm) = Self::decode_fpb(b);
+                let (ce, cm) = Self::decode_fpb(c);
+                let b = if be > 0 {
+                    // 1xxx*2^(eeeee-1)
+                    (0b1000 | bm) * 2u32.pow(be - 1)
+                } else {
+                    bm
+                };
+                let c = if ce > 0 {
+                    // 1xxx*2^(eeeee-1)
+                    (0b1000 | cm) * 2u32.pow(ce - 1)
+                } else {
+                    cm
+                };
+                self.set_reg(
+                    a,
+                    LuaValue::Table(
+                        Rc::new(RefCell::from(Vec::with_capacity(b as usize))),
+                        Rc::new(RefCell::from(HashMap::with_capacity(c as usize))),
+                    ),
+                );
             }
             Instruction::Not(a, b) => {
                 if let LuaValue::Boolean(b) = self.get_reg(b) {
@@ -366,13 +408,33 @@ impl LuaVM {
             Instruction::SetList(a, b, _c) => {
                 if b > 0 {
                     for i in a + 1..=(a + b as u8) {
-                        if let LuaValue::Table(content) = self.get_reg(a) {
+                        if let LuaValue::Table(vec, _) = self.get_reg(a) {
                             let v = self.get_reg(i);
-                            content.borrow_mut().push(v);
+                            vec.borrow_mut().push(v);
                         }
                     }
                 } else {
                     unimplemented!("SETLIST: Variable number of arguments");
+                }
+            }
+            Instruction::SetTable(a, b, c) => {
+                let tbl = self.get_reg(a);
+                let b = if b < 256 {
+                    self.get_reg(b)
+                } else {
+                    let proto = self.get_closure().proto.clone();
+                    let constants = proto.constants();
+                    constants[b as usize % 256].clone()
+                };
+                let c = if c < 256 {
+                    self.get_reg(c)
+                } else {
+                    let proto = self.get_closure().proto.clone();
+                    let constants = proto.constants();
+                    constants[c as usize % 256].clone()
+                };
+                if let LuaValue::Table(_v, h) = tbl {
+                    h.borrow_mut().insert(b, c);
                 }
             }
             Instruction::Sub(a, b, c) => {
