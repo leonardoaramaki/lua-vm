@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::value::LuaValue;
+use crate::{chunk::FunctionBlock, value::LuaValue};
 
 #[derive(Debug, Clone)]
 pub struct Proto {
@@ -28,5 +28,19 @@ impl Proto {
 
     pub fn protos(&self) -> &[Rc<Proto>] {
         &self.p
+    }
+}
+
+impl From<FunctionBlock> for Proto {
+    fn from(value: FunctionBlock) -> Self {
+        Self {
+            bytecode: value.instructions.clone(),
+            constants: value.constants.clone(),
+            p: value
+                .protos
+                .into_iter()
+                .map(|x| Rc::new(Proto::from(x)))
+                .collect(),
+        }
     }
 }

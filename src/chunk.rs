@@ -34,11 +34,32 @@ impl HeaderBlock {
     }
 }
 
+#[derive(Default)]
+pub struct FunctionBlock {
+    pub constants: Vec<LuaValue>,
+    pub instructions: Vec<u32>,
+    pub protos: Vec<FunctionBlock>,
+}
+
+impl FunctionBlock {
+    pub fn new(
+        constants: Vec<LuaValue>,
+        instructions: Vec<u32>,
+        protos: Vec<FunctionBlock>,
+    ) -> Self {
+        Self {
+            constants,
+            instructions,
+            protos,
+        }
+    }
+}
+
+#[allow(unused)]
 pub struct Chunk {
     file: File,
     header: HeaderBlock,
-    pub constants: Vec<LuaValue>,
-    pub instructions: Vec<u32>,
+    function: FunctionBlock,
 }
 
 impl Chunk {
@@ -46,8 +67,7 @@ impl Chunk {
         Self {
             file,
             header: HeaderBlock::default(),
-            constants: vec![],
-            instructions: vec![],
+            function: FunctionBlock::default(),
         }
     }
 
@@ -75,7 +95,7 @@ impl Chunk {
         Ok(())
     }
 
-    fn read_function_block(&mut self) -> anyhow::Result<()> {
+    fn read_function_block(&mut self) -> anyhow::Result<FunctionBlock> {
         let _source_name = self.read_string()?;
         let _line_defined = self.read_integer()?;
         let _last_line_defined = self.read_integer()?;
@@ -84,11 +104,12 @@ impl Chunk {
         let _is_vararg = self.read_byte()?;
         let _max_stack_size = self.read_byte()?;
 
+        let mut function = FunctionBlock::default();
         // Instruction list
         let sizecode = self.read_integer()?;
         for _ in 0..sizecode {
             let instruction = self.read_instruction()?;
-            self.instructions.push(instruction as u32);
+            function.instructions.push(instruction as u32);
         }
 
         // Constant list
@@ -96,19 +117,19 @@ impl Chunk {
         for _ in 0..sizek {
             match self.read_byte()? {
                 0 => {
-                    self.constants.push(LuaValue::Nil);
+                    function.constants.push(LuaValue::Nil);
                 }
                 1 => {
                     let b = self.read_byte()?;
-                    self.constants.push(LuaValue::Boolean(b != 0));
+                    function.constants.push(LuaValue::Boolean(b != 0));
                 }
                 3 => {
                     let n = self.read_number()?;
-                    self.constants.push(LuaValue::Number(f64::from_bits(n)));
+                    function.constants.push(LuaValue::Number(f64::from_bits(n)));
                 }
                 4 => {
                     let s = self.read_string()?;
-                    self.constants.push(LuaValue::String(s));
+                    function.constants.push(LuaValue::String(s));
                 }
                 _ => unimplemented!(),
             }
@@ -116,13 +137,14 @@ impl Chunk {
 
         let sizep = self.read_integer()?;
         for _ in 0..sizep {
-            let _ = self.read_function_block();
+            let proto = self.read_function_block()?;
+            function.protos.push(proto);
         }
 
-        Ok(())
+        Ok(function)
     }
 
-    pub fn load(&mut self) -> anyhow::Result<()> {
+    pub fn load(&mut self) -> anyhow::Result<FunctionBlock> {
         self.read_header_block()?;
         self.read_function_block()
     }

@@ -47,6 +47,8 @@ impl PartialEq for LuaValue {
             (LuaValue::String(a), LuaValue::String(b)) => a == b,
             (LuaValue::Boolean(a), LuaValue::Boolean(b)) => a == b,
             (LuaValue::Nil, LuaValue::Nil) => true,
+            (LuaValue::LuaFunction(a), LuaValue::LuaFunction(b)) => Rc::ptr_eq(a, b),
+            (LuaValue::Table(_v1, h1), LuaValue::Table(_v2, h2)) => Rc::ptr_eq(h1, h2),
             _ => panic!("Incompatible types: {}, {}", self, other),
         }
     }
@@ -87,7 +89,8 @@ impl fmt::Display for LuaValue {
                 let a = self as *const LuaValue;
                 write!(f, "table: {:p}", a)
             }
-            _ => unimplemented!("Function can't be printed out"),
+            LuaValue::LuaFunction(proto) => write!(f, "function: {:p}", proto),
+            _ => unimplemented!("Error: this type can't be displayed"),
         }
     }
 }
@@ -147,7 +150,13 @@ impl Hash for LuaValue {
         match self {
             LuaValue::Number(n) => n.to_bits().hash(state),
             LuaValue::String(s) => s.hash(state),
-            _ => unimplemented!(),
+            LuaValue::Boolean(b) => b.hash(state),
+            LuaValue::Table(_v, h) => Rc::as_ptr(h).hash(state),
+            LuaValue::LuaFunction(proto) => Rc::as_ptr(proto).hash(state),
+            _ => {
+                dbg!(&self);
+                unimplemented!()
+            }
         }
     }
 }
