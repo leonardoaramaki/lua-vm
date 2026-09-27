@@ -1,7 +1,11 @@
+use std::fs::File;
+
+use crate::chunk::Chunk;
 use crate::proto::*;
 use crate::value::LuaValue;
 use crate::vm::LuaVM;
 
+mod chunk;
 mod closure;
 mod proto;
 mod value;
@@ -14,7 +18,10 @@ fn print(args: &[LuaValue]) {
     println!("{}", args[0]);
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let file = File::open("luac.out").unwrap();
+    let mut chunk = Chunk::new(file);
+    chunk.load()?;
     // local t = { x = 10, y = 20 }
     // print(t.x) --> 10
     // print(t.y) --> 20
@@ -42,7 +49,8 @@ fn main() {
         LuaValue::Number(20.0),                  // K3
         LuaValue::String(String::from("print")), // K4
     ];
-    let proto = Proto::new(main_bytecode, main_constants, vec![]);
+    let proto = Proto::new(chunk.instructions, chunk.constants, vec![]);
     vm.load_proto(proto);
     while vm.step().is_some() {}
+    Ok(())
 }
