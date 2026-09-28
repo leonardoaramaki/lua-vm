@@ -17,7 +17,10 @@ fn print(args: &[LuaValue]) {
     if args.is_empty() {
         return;
     }
-    println!("{}", args[0]);
+    for arg in args {
+        print!("{}\t", arg);
+    }
+    println!();
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
