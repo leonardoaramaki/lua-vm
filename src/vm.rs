@@ -32,6 +32,7 @@ pub enum Instruction {
     Not(A, B),
     Pow(A, B, C),
     Return(A, Bx),
+    SelfOp(A, B, C),
     SetGlobal(A, Bx),
     SetList(A, B, C),
     SetTable(A, B, C),
@@ -46,6 +47,7 @@ pub struct LuaVM {
     pub protos: Vec<Rc<Proto>>,
     pub env: Rc<RefCell<Env>>,
     pub stack: VecDeque<LuaValue>,
+    pub top: usize,
 }
 
 impl LuaVM {
@@ -55,6 +57,7 @@ impl LuaVM {
             protos: vec![],
             env: Rc::new(RefCell::new(Env::default())),
             stack: vec![LuaValue::Nil; 1000].into(),
+            top: 0,
         }
     }
 
@@ -88,7 +91,11 @@ impl LuaVM {
     pub fn load_proto(&mut self, proto: Proto) {
         let proto = Rc::new(proto);
         self.protos.push(proto.clone());
-        self.callstack.push_back(LuaClosure::new(proto));
+        let mut main = LuaClosure::new(proto.clone());
+        main.base = 1;
+        main.env = self.env.clone();
+        self.stack[0] = LuaValue::LuaFunction(proto);
+        self.callstack.push_back(main);
     }
 
     pub fn fetch(&mut self) -> u32 {
@@ -115,6 +122,7 @@ impl LuaVM {
             7 => Instruction::SetGlobal(a, bx),
             9 => Instruction::SetTable(a, b, c),
             10 => Instruction::NewTable(a, b, c),
+            11 => Instruction::SelfOp(a, b, c),
             12 => Instruction::Add(a, b, c),
             13 => Instruction::Sub(a, b, c),
             14 => Instruction::Mul(a, b, c),
@@ -162,15 +170,42 @@ impl LuaVM {
                 };
                 self.set_reg(a, LuaValue::sum(&b, &c));
             }
-            Instruction::Call(a, b, _c) => {
-                if let LuaValue::Function(function) = self.get_reg(a) {
-                    let mut args = vec![];
-                    for i in 1..=(b - 1) {
-                        args.push(self.get_reg(a + i as u8));
-                    }
-                    function(&args);
+            Instruction::Call(a, b, c) => {
+                let func = self.get_closure().base + a as usize;
+                let nargs = if b == 0 {
+                    self.top - (func + 1)
                 } else {
-                    panic!("TAILCALL: R(A) is not a function");
+                    b as usize - 1
+                };
+                let nresults = c as i32 - 1;
+                match self.get_reg(a) {
+                    LuaValue::Function(function) => {
+                        let args: Vec<LuaValue> = self
+                            .stack
+                            .range(func + 1..func + 1 + nargs)
+                            .cloned()
+                            .collect();
+                        function(&args);
+                        if c == 0 {
+                            // Caller wants "all results".
+                            // Since there is none, end is the func itself.
+                            self.top = func;
+                        } else {
+                            // Caller wants exactly c - 1 results in R(A), R(A + 1), ...
+                            // Since no results were returned, all of them are Nil
+                            for i in 0..(c as usize - 1) {
+                                self.stack[func + i] = LuaValue::Nil;
+                            }
+                        }
+                    }
+                    LuaValue::LuaFunction(lua_function) => {
+                        let mut closure = LuaClosure::new(lua_function);
+                        closure.env = self.env.clone();
+                        closure.base = func + 1;
+                        closure.nresults = nresults;
+                        self.callstack.push_front(closure);
+                    }
+                    _ => {}
                 }
             }
             Instruction::Closure(a, bx) => {
@@ -397,8 +432,45 @@ impl LuaVM {
                     _ => panic!("TAILCALL: R(A) is not a valid function"),
                 }
             }
-            Instruction::Return(_a, _b) => {
-                self.callstack.pop_front();
+            Instruction::Return(a, b) => {
+                let frame = self.callstack.pop_front().unwrap();
+                let first = frame.base + a as usize;
+                let n = if b == 0 {
+                    self.top - first
+                } else {
+                    b as usize - 1
+                };
+                if self.callstack.is_empty() {
+                    return;
+                }
+                let dst = frame.base - 1;
+                for i in 0..n {
+                    self.stack[dst + i] = self.stack[first + i].clone();
+                }
+                if frame.nresults < 0 {
+                    self.top = dst + n;
+                } else {
+                    // nresults is how many values the caller wants.
+                    // n is how many values are actually returned.
+                    for i in n..frame.nresults as usize {
+                        self.stack[dst + i] = LuaValue::Nil;
+                    }
+                }
+            }
+            Instruction::SelfOp(a, b, c) => {
+                let b_value = self.get_reg(b);
+                self.set_reg(a + 1, b_value.clone());
+                let c_value = if c < 256 {
+                    self.get_reg(c)
+                } else {
+                    self.get_closure().proto.constants()[c as usize - 256].clone()
+                };
+                if let LuaValue::Table(_, h) = b_value {
+                    let value = h.borrow().get(&c_value).cloned().unwrap_or(LuaValue::Nil);
+                    self.set_reg(a, value);
+                } else {
+                    panic!("SELF: R(B) is not a table");
+                }
             }
             Instruction::SetGlobal(a, bx) => {
                 let ra = self.get_reg(a);

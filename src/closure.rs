@@ -19,6 +19,7 @@ pub struct LuaClosure {
     pub proto: Rc<Proto>,
     pub env: Rc<RefCell<Env>>,
     pub base: usize,
+    pub nresults: i32, // C - 1; -1 = MULTRET (C = 0)
 }
 
 impl LuaClosure {
@@ -28,6 +29,7 @@ impl LuaClosure {
             proto,
             env: Rc::new(RefCell::new(Env::default())),
             base: 0,
+            nresults: -1,
         }
     }
 }
