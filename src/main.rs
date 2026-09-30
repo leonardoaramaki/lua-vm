@@ -5,12 +5,15 @@ use std::rc::Rc;
 use anyhow::Ok;
 
 use crate::chunk::Chunk;
+use crate::math::math_module;
 use crate::proto::*;
 use crate::value::LuaValue;
 use crate::vm::LuaVM;
 
 mod chunk;
 mod closure;
+/// Built-in modules
+mod math;
 mod proto;
 mod value;
 mod vm;
@@ -24,13 +27,6 @@ fn print(args: &[LuaValue]) -> anyhow::Result<Vec<LuaValue>> {
     }
     println!();
     Ok(vec![])
-}
-
-fn dobro(args: &[LuaValue]) -> anyhow::Result<Vec<LuaValue>> {
-    let Some(LuaValue::Number(n)) = args.first() else {
-        anyhow::bail!("dobro: not a number")
-    };
-    Ok(vec![LuaValue::Number(n * 2.0)])
 }
 
 fn main() -> anyhow::Result<()> {
@@ -52,9 +48,7 @@ fn main() -> anyhow::Result<()> {
     vm.env
         .borrow_mut()
         .insert_global("print", LuaValue::Function(print));
-    vm.env
-        .borrow_mut()
-        .insert_global("dobro", LuaValue::Function(dobro));
+    vm.env.borrow_mut().insert_global("math", math_module());
     let proto = Proto::new(
         main_function.instructions,
         main_function.constants,
