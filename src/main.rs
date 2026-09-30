@@ -2,6 +2,8 @@ use std::fs::File;
 use std::path::Path;
 use std::rc::Rc;
 
+use anyhow::Ok;
+
 use crate::chunk::Chunk;
 use crate::proto::*;
 use crate::value::LuaValue;
@@ -13,17 +15,25 @@ mod proto;
 mod value;
 mod vm;
 
-fn print(args: &[LuaValue]) {
+fn print(args: &[LuaValue]) -> anyhow::Result<Vec<LuaValue>> {
     if args.is_empty() {
-        return;
+        return Ok(vec![]);
     }
     for arg in args {
         print!("{}\t", arg);
     }
     println!();
+    Ok(vec![])
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn dobro(args: &[LuaValue]) -> anyhow::Result<Vec<LuaValue>> {
+    let Some(LuaValue::Number(n)) = args.first() else {
+        anyhow::bail!("dobro: not a number")
+    };
+    Ok(vec![LuaValue::Number(n * 2.0)])
+}
+
+fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let file = args
         .iter()
@@ -42,6 +52,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     vm.env
         .borrow_mut()
         .insert_global("print", LuaValue::Function(print));
+    vm.env
+        .borrow_mut()
+        .insert_global("dobro", LuaValue::Function(dobro));
     let proto = Proto::new(
         main_function.instructions,
         main_function.constants,

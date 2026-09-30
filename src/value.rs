@@ -10,13 +10,15 @@ use std::{
 
 use crate::proto::Proto;
 
+type NativeFn = fn(&[LuaValue]) -> anyhow::Result<Vec<LuaValue>>;
+
 #[derive(Debug, Clone)]
 pub enum LuaValue {
     Nil,
     Boolean(bool),
     Number(f64),
     String(String),
-    Function(fn(&[LuaValue])),
+    Function(NativeFn),
     LuaFunction(Rc<Proto>),
     Table(
         Rc<RefCell<Vec<LuaValue>>>,

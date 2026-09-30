@@ -185,16 +185,20 @@ impl LuaVM {
                             .range(func + 1..func + 1 + nargs)
                             .cloned()
                             .collect();
-                        function(&args);
+                        let result = function(&args).unwrap();
                         if c == 0 {
                             // Caller wants "all results".
-                            // Since there is none, end is the func itself.
-                            self.top = func;
+                            result
+                                .iter()
+                                .enumerate()
+                                .for_each(|x| self.stack[func + x.0] = x.1.clone());
+
+                            self.top = func + result.len();
                         } else {
                             // Caller wants exactly c - 1 results in R(A), R(A + 1), ...
-                            // Since no results were returned, all of them are Nil
-                            for i in 0..(c as usize - 1) {
-                                self.stack[func + i] = LuaValue::Nil;
+                            for i in 0..nresults as usize {
+                                self.stack[func + i] =
+                                    result.get(i).cloned().unwrap_or(LuaValue::Nil);
                             }
                         }
                     }
@@ -205,7 +209,7 @@ impl LuaVM {
                         closure.nresults = nresults;
                         self.callstack.push_front(closure);
                     }
-                    _ => {}
+                    other => panic!("CALL: attempt to call a {} value", other),
                 }
             }
             Instruction::Closure(a, bx) => {
@@ -217,9 +221,8 @@ impl LuaVM {
                 // R(A) := R(B) .... R(C)
                 assert!(c >= b);
                 let mut result = String::new();
-                let base = self.get_closure().base;
                 for i in b..=c {
-                    if let LuaValue::String(string) = self.get_reg(base + i as usize) {
+                    if let LuaValue::String(string) = self.get_reg(i as usize) {
                         result.push_str(&string);
                     }
                 }
@@ -412,15 +415,38 @@ impl LuaVM {
                 };
                 self.set_reg(a, b.pow(c));
             }
-            Instruction::TailCall(a, b, _c) => {
+            Instruction::TailCall(a, b, c) => {
                 let base = self.get_closure().base;
+                let func = self.get_closure().base + a as usize;
+                let nargs = if b == 0 {
+                    self.top - (func + 1)
+                } else {
+                    b as usize - 1
+                };
+                let nresults = c as i32 - 1;
                 match self.stack[base + a as usize].clone() {
                     LuaValue::Function(function) => {
-                        let mut args = vec![];
-                        for i in 1..=(b - 1) {
-                            args.push(self.get_reg(a + i as u8));
+                        let args: Vec<LuaValue> = self
+                            .stack
+                            .range(func + 1..func + 1 + nargs)
+                            .cloned()
+                            .collect();
+                        let result = function(&args).unwrap();
+                        if c == 0 {
+                            // Caller wants "all results".
+                            result
+                                .iter()
+                                .enumerate()
+                                .for_each(|x| self.stack[func + x.0] = x.1.clone());
+
+                            self.top = func + result.len();
+                        } else {
+                            // Caller wants exactly c - 1 results in R(A), R(A + 1), ...
+                            for i in 0..nresults as usize {
+                                self.stack[func + i] =
+                                    result.get(i).cloned().unwrap_or(LuaValue::Nil);
+                            }
                         }
-                        function(&args);
                     }
                     LuaValue::LuaFunction(function) => {
                         let base = self.get_closure().base;
