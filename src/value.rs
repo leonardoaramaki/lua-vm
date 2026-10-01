@@ -1,4 +1,3 @@
-use core::panic;
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -51,7 +50,7 @@ impl PartialEq for LuaValue {
             (LuaValue::Nil, LuaValue::Nil) => true,
             (LuaValue::LuaFunction(a), LuaValue::LuaFunction(b)) => Rc::ptr_eq(a, b),
             (LuaValue::Table(_v1, h1), LuaValue::Table(_v2, h2)) => Rc::ptr_eq(h1, h2),
-            _ => panic!("Incompatible types: {}, {}", self, other),
+            (_, _) => false,
         }
     }
 }

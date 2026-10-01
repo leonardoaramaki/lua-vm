@@ -291,12 +291,7 @@ impl LuaVM {
                             if let LuaValue::Table(v, h) = self.get_reg(b) {
                                 // Return from the array if within bounds otherwise return from the
                                 // map
-                                if n == 0.0 {
-                                    self.set_reg(a, LuaValue::Nil);
-                                } else if n.fract() == 0.0
-                                    && n >= 1.0
-                                    && n <= v.borrow().len() as f64
-                                {
+                                if n.fract() == 0.0 && n >= 1.0 && n <= v.borrow().len() as f64 {
                                     self.set_reg(a, v.borrow()[n as usize - 1].clone());
                                 } else {
                                     self.set_reg(
@@ -319,7 +314,9 @@ impl LuaVM {
                 let b = self.get_reg(b);
                 let l = match b {
                     LuaValue::String(s) => s.len(),
-                    LuaValue::Table(v, _h) => v.borrow().len(),
+                    LuaValue::Table(v, _h) => {
+                        v.borrow().iter().filter(|x| **x != LuaValue::Nil).count()
+                    }
                     _ => unimplemented!(),
                 };
                 self.set_reg(a, LuaValue::Number(l as f64));
@@ -540,13 +537,15 @@ impl LuaVM {
                     constants[c as usize % 256].clone()
                 };
                 if let LuaValue::Table(v, h) = tbl {
-                    if let LuaValue::Number(n) = b {
-                        if n.fract() == 0.0 && n >= 1.0 && n <= v.borrow().len() as f64 {
-                            v.borrow_mut()[n as usize - 1] = c;
-                        }
-                    } else {
-                        h.borrow_mut().insert(b, c);
+                    if let LuaValue::Number(n) = b
+                        && n.fract() == 0.0
+                        && n >= 1.0
+                        && n <= v.borrow().len() as f64
+                    {
+                        v.borrow_mut()[n as usize - 1] = c;
+                        return;
                     }
+                    h.borrow_mut().insert(b, c);
                 }
             }
             Instruction::Sub(a, b, c) => {
