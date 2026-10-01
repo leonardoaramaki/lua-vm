@@ -294,7 +294,10 @@ impl LuaVM {
                                 if n >= 1.0 && n < v.borrow().len() as f64 {
                                     self.set_reg(a, v.borrow()[n as usize].clone());
                                 } else {
-                                    self.set_reg(a, h.borrow()[&c].clone());
+                                    self.set_reg(
+                                        a,
+                                        h.borrow().get(&c).unwrap_or(&LuaValue::Nil).clone(),
+                                    );
                                 }
                             }
                         }
@@ -504,6 +507,9 @@ impl LuaVM {
                 self.env.borrow_mut().insert_global(&String::from(k), ra);
             }
             Instruction::SetList(a, b, _c) => {
+                if let LuaValue::Table(v, _) = self.get_reg(a) {
+                    v.borrow_mut().push(LuaValue::Nil);
+                }
                 if b > 0 {
                     for i in a + 1..=(a + b as u8) {
                         if let LuaValue::Table(vec, _) = self.get_reg(a) {
