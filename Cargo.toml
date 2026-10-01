@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
+luac = { git = "https://github.com/leonardoaramaki/luac51-rs" }

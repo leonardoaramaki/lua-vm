@@ -1,7 +1,4 @@
-use std::{
-    fs::File,
-    io::{self, Read},
-};
+use std::io::{self, Read};
 
 use crate::value::LuaValue;
 
@@ -56,14 +53,14 @@ impl FunctionBlock {
 }
 
 #[allow(unused)]
-pub struct Chunk {
-    file: File,
+pub struct Chunk<R: Read> {
+    file: R,
     header: HeaderBlock,
     function: FunctionBlock,
 }
 
-impl Chunk {
-    pub fn new(file: File) -> Self {
+impl<R: Read> Chunk<R> {
+    pub fn new(file: R) -> Self {
         Self {
             file,
             header: HeaderBlock::default(),

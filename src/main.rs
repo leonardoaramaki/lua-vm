@@ -1,8 +1,5 @@
-use std::fs::File;
-use std::path::Path;
+use std::io::Cursor;
 use std::rc::Rc;
-
-use anyhow::Ok;
 
 use crate::chunk::Chunk;
 use crate::math::math_module;
@@ -31,18 +28,14 @@ fn print(args: &[LuaValue]) -> anyhow::Result<Vec<LuaValue>> {
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let file = args
-        .iter()
-        .skip(1)
-        .find(|arg| Path::new(arg).extension().is_some_and(|x| x == "out"))
-        .and_then(|f| File::open(f).ok());
-    let mut chunk = match file {
-        Some(f) => Chunk::new(f),
-        None => {
-            eprintln!("Error: should provide a file name with .out extension");
-            std::process::exit(1);
-        }
+    let Some(filename) = args.get(1) else {
+        anyhow::bail!("Usage: {} <lua-file>", args[0]);
     };
+
+    let Ok(bytecode) = luac::compile_file(filename) else {
+        anyhow::bail!(format!("Could not generate bytecode from {}", filename));
+    };
+    let mut chunk = Chunk::new(Cursor::new(bytecode));
     let main_function = chunk.load()?;
     let mut vm = LuaVM::new();
     vm.env
