@@ -35,7 +35,7 @@ dependencies = [
 [[package]]
 name = "luac"
 version = "0.1.0"
-source = "git+https://github.com/leonardoaramaki/luac51-rs#524a7d75dd50bbab06e65fcdee8c0d2211ddda43"
+source = "git+https://github.com/leonardoaramaki/luac51-rs.git#524a7d75dd50bbab06e65fcdee8c0d2211ddda43"
 dependencies = [
  "cc",
 ]
