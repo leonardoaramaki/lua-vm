@@ -291,8 +291,13 @@ impl LuaVM {
                             if let LuaValue::Table(v, h) = self.get_reg(b) {
                                 // Return from the array if within bounds otherwise return from the
                                 // map
-                                if n >= 1.0 && n < v.borrow().len() as f64 {
-                                    self.set_reg(a, v.borrow()[n as usize].clone());
+                                if n == 0.0 {
+                                    self.set_reg(a, LuaValue::Nil);
+                                } else if n.fract() == 0.0
+                                    && n >= 1.0
+                                    && n <= v.borrow().len() as f64
+                                {
+                                    self.set_reg(a, v.borrow()[n as usize - 1].clone());
                                 } else {
                                     self.set_reg(
                                         a,
@@ -302,7 +307,7 @@ impl LuaVM {
                             }
                         }
                         _ => {
-                            self.set_reg(a, h.borrow()[&c].clone());
+                            self.set_reg(a, h.borrow().get(&c).unwrap_or(&LuaValue::Nil).clone());
                         }
                     }
                 }
@@ -507,9 +512,6 @@ impl LuaVM {
                 self.env.borrow_mut().insert_global(&String::from(k), ra);
             }
             Instruction::SetList(a, b, _c) => {
-                if let LuaValue::Table(v, _) = self.get_reg(a) {
-                    v.borrow_mut().push(LuaValue::Nil);
-                }
                 if b > 0 {
                     for i in a + 1..=(a + b as u8) {
                         if let LuaValue::Table(vec, _) = self.get_reg(a) {
@@ -537,8 +539,14 @@ impl LuaVM {
                     let constants = proto.constants();
                     constants[c as usize % 256].clone()
                 };
-                if let LuaValue::Table(_v, h) = tbl {
-                    h.borrow_mut().insert(b, c);
+                if let LuaValue::Table(v, h) = tbl {
+                    if let LuaValue::Number(n) = b {
+                        if n.fract() == 0.0 && n >= 1.0 && n <= v.borrow().len() as f64 {
+                            v.borrow_mut()[n as usize - 1] = c;
+                        }
+                    } else {
+                        h.borrow_mut().insert(b, c);
+                    }
                 }
             }
             Instruction::Sub(a, b, c) => {
