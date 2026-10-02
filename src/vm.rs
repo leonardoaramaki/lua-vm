@@ -19,6 +19,8 @@ pub enum Instruction {
     Div(A, B, C),
     Eq(A, B, C),
     GetGlobal(A, Bx),
+    ForLoop(A, SBx),
+    ForPrep(A, SBx),
     GetTable(A, B, C),
     Jmp(SBx),
     Len(A, B),
@@ -139,6 +141,8 @@ impl LuaVM {
             28 => Instruction::Call(a, b, c),
             29 => Instruction::TailCall(a, b, c),
             30 => Instruction::Return(a, b),
+            31 => Instruction::ForLoop(a, sbx),
+            32 => Instruction::ForPrep(a, sbx),
             34 => Instruction::SetList(a, b, c),
             36 => Instruction::Closure(a, bx),
             _ => unimplemented!("{}", opcode),
@@ -258,6 +262,40 @@ impl LuaVM {
                 let skip_next = (b == c) == (a != 1);
                 if skip_next {
                     self.get_closure_mut().pc += 1;
+                }
+            }
+            Instruction::ForPrep(a, sbx) => {
+                // Initial value
+                let initial = self.get_reg(a);
+                // Limit
+                let _limit = self.get_reg(a + 1);
+                // Step
+                let step = self.get_reg(a + 2);
+                // Loop Variable
+                let _loop_var = self.get_reg(a + 3);
+                self.set_reg(a, initial - step);
+                self.get_closure_mut().pc += sbx;
+            }
+            Instruction::ForLoop(a, sbx) => {
+                // Limit
+                let limit = self.get_reg(a + 1);
+                // Step
+                let step = self.get_reg(a + 2);
+                let next = self.get_reg(a) + step.clone();
+                self.set_reg(a, next.clone());
+                let continue_loop = match step {
+                    LuaValue::Number(n) => {
+                        if n > 0.0 {
+                            next <= limit
+                        } else {
+                            next >= limit
+                        }
+                    }
+                    other => panic!("'for' step must be a number, got, {}", other),
+                };
+                if continue_loop {
+                    self.get_closure_mut().pc += sbx;
+                    self.set_reg(a + 3, next);
                 }
             }
             Instruction::GetGlobal(a, bx) => {

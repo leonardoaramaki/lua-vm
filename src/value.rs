@@ -3,7 +3,7 @@ use std::{
     collections::HashMap,
     fmt::{self},
     hash::Hash,
-    ops::{Div, Mul, Not, Rem, Sub},
+    ops::{Add, Div, Mul, Not, Rem, Sub},
     rc::Rc,
 };
 
@@ -96,6 +96,16 @@ impl fmt::Display for LuaValue {
     }
 }
 
+impl Add for LuaValue {
+    type Output = LuaValue;
+    fn add(self, rhs: Self) -> LuaValue {
+        match (self, rhs) {
+            (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a + b),
+            _ => unimplemented!("Cannot add incompatible types"),
+        }
+    }
+}
+
 impl Sub for LuaValue {
     type Output = LuaValue;
     fn sub(self, rhs: Self) -> LuaValue {
@@ -111,7 +121,7 @@ impl Div for LuaValue {
     fn div(self, rhs: Self) -> LuaValue {
         match (self, rhs) {
             (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a / b),
-            _ => unimplemented!("Cannot subtract incompatible types"),
+            _ => unimplemented!("Cannot divide incompatible types"),
         }
     }
 }
@@ -121,7 +131,7 @@ impl Mul for LuaValue {
     fn mul(self, rhs: Self) -> LuaValue {
         match (self, rhs) {
             (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a * b),
-            _ => unimplemented!("Cannot subtract incompatible types"),
+            _ => unimplemented!("Cannot multiply incompatible types"),
         }
     }
 }
@@ -131,7 +141,7 @@ impl Rem for LuaValue {
     fn rem(self, rhs: Self) -> LuaValue {
         match (self, rhs) {
             (LuaValue::Number(a), LuaValue::Number(b)) => LuaValue::Number(a % b),
-            _ => unimplemented!("Cannot subtract incompatible types"),
+            _ => unimplemented!("Cannot rem incompatible types"),
         }
     }
 }
@@ -141,7 +151,7 @@ impl Not for LuaValue {
     fn not(self) -> LuaValue {
         match self {
             LuaValue::Boolean(b) => LuaValue::Boolean(!b),
-            _ => unimplemented!("Cannot subtract incompatible types"),
+            _ => unimplemented!("Cannot not incompatible types"),
         }
     }
 }
