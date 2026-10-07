@@ -5,5 +5,6 @@ fn main() -> anyhow::Result<()> {
     let Some(filename) = args.get(1) else {
         anyhow::bail!("Usage: {} <lua-file>", args[0]);
     };
-    Lua::new().exec_file(filename)
+    let mut lua = Lua::new();
+    lua.exec_file(filename)
 }

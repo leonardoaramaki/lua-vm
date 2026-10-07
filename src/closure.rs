@@ -2,7 +2,7 @@ use crate::{proto::Proto, value::LuaValue};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 /// env is where the globals table lives (G_)
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Env {
     pub globals: HashMap<String, LuaValue>,
 }
@@ -13,7 +13,6 @@ impl Env {
     }
 }
 
-#[derive(Debug)]
 pub struct LuaClosure {
     pub pc: i32,
     pub proto: Rc<Proto>,

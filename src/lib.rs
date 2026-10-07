@@ -1,6 +1,6 @@
 use std::{io::Cursor, path::Path, rc::Rc};
 
-use crate::{chunk::Chunk, prelude::lua_prelude_print, proto::Proto, value::LuaValue, vm::LuaVM};
+use crate::{chunk::Chunk, prelude::lua_prelude_print, proto::Proto, vm::LuaVM};
 
 mod chunk;
 mod closure;
@@ -10,6 +10,8 @@ mod proto;
 mod value;
 mod vm;
 
+pub use value::{LuaValue, NativeFn};
+
 pub struct Lua {
     lua_vm: LuaVM,
 }
@@ -17,8 +19,12 @@ pub struct Lua {
 impl Lua {
     pub fn new() -> Self {
         let vm = LuaVM::new();
-        Lua::add_global(&vm, "print", LuaValue::Function(lua_prelude_print));
-        Lua::add_global(&vm, "math", math::math_module());
+        vm.env
+            .borrow_mut()
+            .insert_global("print", LuaValue::Function(Rc::new(lua_prelude_print)));
+        vm.env
+            .borrow_mut()
+            .insert_global("math", math::math_module());
         Self { lua_vm: vm }
     }
 
@@ -42,7 +48,24 @@ impl Lua {
         Ok(())
     }
 
-    fn add_global(vm: &LuaVM, k: &str, v: LuaValue) {
-        vm.env.borrow_mut().insert_global(k, v);
+    pub fn set_global(&mut self, k: &str, v: LuaValue) -> anyhow::Result<()> {
+        self.lua_vm.env.borrow_mut().insert_global(k, v);
+        Ok(())
+    }
+
+    pub fn get_global(&self, name: &str) -> Option<LuaValue> {
+        self.lua_vm.env.borrow_mut().globals.get(name).cloned()
+    }
+
+    pub fn call_global(&mut self, name: &str, args: &[LuaValue]) -> anyhow::Result<Vec<LuaValue>> {
+        let func = self
+            .lua_vm
+            .env
+            .borrow()
+            .globals
+            .get(name)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("global '{name}' is not defined"))?;
+        self.lua_vm.call(func, args)
     }
 }

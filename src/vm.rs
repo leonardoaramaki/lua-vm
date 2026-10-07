@@ -43,7 +43,6 @@ pub enum Instruction {
     Unm(A, B),
 }
 
-#[derive(Debug)]
 pub struct LuaVM {
     pub callstack: VecDeque<LuaClosure>,
     pub protos: Vec<Rc<Proto>>,
@@ -88,6 +87,29 @@ impl LuaVM {
 
     fn get_closure_mut(&mut self) -> &mut LuaClosure {
         self.callstack.front_mut().unwrap()
+    }
+
+    pub fn call(&mut self, func: LuaValue, args: &[LuaValue]) -> anyhow::Result<Vec<LuaValue>> {
+        match func {
+            LuaValue::Function(f) => f(args),
+            LuaValue::LuaFunction(proto) => {
+                let func_slot = 0;
+                let base = func_slot + 1;
+                self.stack[func_slot] = LuaValue::LuaFunction(proto.clone());
+                for (i, arg) in args.iter().enumerate() {
+                    self.stack[base + i] = arg.clone();
+                }
+                self.top = base + args.len();
+                let mut closure = LuaClosure::new(proto);
+                closure.env = self.env.clone();
+                closure.base = base;
+                closure.nresults = 0;
+                self.callstack.push_front(closure);
+                while self.step().is_some() {}
+                Ok(vec![])
+            }
+            _other => anyhow::bail!("attempt to call an invalid value"),
+        }
     }
 
     pub fn load_proto(&mut self, proto: Proto) {

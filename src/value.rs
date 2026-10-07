@@ -9,9 +9,9 @@ use std::{
 
 use crate::proto::Proto;
 
-type NativeFn = fn(&[LuaValue]) -> anyhow::Result<Vec<LuaValue>>;
+pub type NativeFn = Rc<dyn Fn(&[LuaValue]) -> anyhow::Result<Vec<LuaValue>>>;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum LuaValue {
     Nil,
     Boolean(bool),
@@ -165,7 +165,6 @@ impl Hash for LuaValue {
             LuaValue::Table(_v, h) => Rc::as_ptr(h).hash(state),
             LuaValue::LuaFunction(proto) => Rc::as_ptr(proto).hash(state),
             _ => {
-                dbg!(&self);
                 unimplemented!()
             }
         }

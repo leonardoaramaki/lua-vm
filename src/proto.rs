@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::{chunk::FunctionBlock, value::LuaValue};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Proto {
     bytecode: Vec<u32>,
     constants: Vec<LuaValue>,

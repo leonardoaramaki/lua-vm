@@ -8,7 +8,7 @@ pub fn math_module() -> LuaValue {
     let mut h = HashMap::new();
     h.insert(
         LuaValue::String("floor".into()),
-        LuaValue::Function(math_floor),
+        LuaValue::Function(Rc::new(math_floor)),
     );
     LuaValue::Table(Rc::new(RefCell::new(Vec::new())), Rc::new(RefCell::new(h)))
 }
