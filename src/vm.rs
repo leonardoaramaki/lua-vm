@@ -177,6 +177,15 @@ impl LuaVM {
         ((fpb >> 3) & 0x1F, (fpb & 0b00000111))
     }
 
+    fn get_rk(&mut self, rk: u32) -> LuaValue {
+        // RK(x): registrador se x < 256, senão Kst(x - 256)
+        if rk < 256 {
+            self.get_reg(rk)
+        } else {
+            self.get_closure().proto.constants()[(rk - 256) as usize].clone()
+        }
+    }
+
     pub fn execute(&mut self, instruction: Instruction) {
         match instruction {
             Instruction::Move(a, b) => {
@@ -186,16 +195,7 @@ impl LuaVM {
             }
             Instruction::Add(a, b, c) => {
                 // R(A) := RK(B) + RK(C)
-                let b = if b < 256 {
-                    self.get_reg(b)
-                } else {
-                    unimplemented!("FIXME: adding constants not implemented")
-                };
-                let c = if c < 256 {
-                    self.get_reg(c)
-                } else {
-                    unimplemented!("FIXME: adding constants not implemented")
-                };
+                let (b, c) = (self.get_rk(b), self.get_rk(c));
                 self.set_reg(a, LuaValue::sum(&b, &c));
             }
             Instruction::Call(a, b, c) => {
@@ -258,30 +258,12 @@ impl LuaVM {
             }
             Instruction::Div(a, b, c) => {
                 // R(A) := RK(B) / RK(C)
-                let b = if b < 256 {
-                    self.get_reg(b)
-                } else {
-                    unimplemented!("FIXME: adding constants not implemented")
-                };
-                let c = if c < 256 {
-                    self.get_reg(c)
-                } else {
-                    unimplemented!("FIXME: adding constants not implemented")
-                };
+                let (b, c) = (self.get_rk(b), self.get_rk(c));
                 self.set_reg(a, b / c);
             }
             Instruction::Eq(a, b, c) => {
                 // if ((RK(B) == RK(C)) ~= A) then PC++
-                let b = if b < 256 {
-                    self.get_reg(b)
-                } else {
-                    unimplemented!("FIXME: B is a constant: can't EQ constants")
-                };
-                let c = if c < 256 {
-                    self.get_reg(c)
-                } else {
-                    unimplemented!("FIXME: C is a constant: can't EQ constants")
-                };
+                let (b, c) = (self.get_rk(b), self.get_rk(c));
                 // Determine should skip next instruction
                 let skip_next = (b == c) == (a != 1);
                 if skip_next {
@@ -387,16 +369,7 @@ impl LuaVM {
             }
             Instruction::Lt(a, b, c) => {
                 // if ((RK(B) == RK(C)) ~= A) then PC++
-                let b = if b < 256 {
-                    self.get_reg(b)
-                } else {
-                    unimplemented!("FIXME: B is a constant: can't EQ constants")
-                };
-                let c = if c < 256 {
-                    self.get_reg(c)
-                } else {
-                    unimplemented!("FIXME: C is a constant: can't EQ constants")
-                };
+                let (b, c) = (self.get_rk(b), self.get_rk(c));
                 // Determine should skip next instruction
                 let skip_next = (b < c) == (a != 1);
                 if skip_next {
@@ -416,30 +389,12 @@ impl LuaVM {
             }
             Instruction::Mul(a, b, c) => {
                 // R(A) := RK(B) * RK(C)
-                let b = if b < 256 {
-                    self.get_reg(b)
-                } else {
-                    unimplemented!("FIXME: adding constants not implemented")
-                };
-                let c = if c < 256 {
-                    self.get_reg(c)
-                } else {
-                    unimplemented!("FIXME: adding constants not implemented")
-                };
+                let (b, c) = (self.get_rk(b), self.get_rk(c));
                 self.set_reg(a, b * c);
             }
             Instruction::Mod(a, b, c) => {
                 // R(A) := RK(B) + RK(C)
-                let b = if b < 256 {
-                    self.get_reg(b)
-                } else {
-                    unimplemented!("FIXME: adding constants not implemented")
-                };
-                let c = if c < 256 {
-                    self.get_reg(c)
-                } else {
-                    unimplemented!("FIXME: adding constants not implemented")
-                };
+                let (b, c) = (self.get_rk(b), self.get_rk(c));
                 self.set_reg(a, b % c);
             }
             Instruction::NewTable(a, b, c) => {
@@ -472,16 +427,7 @@ impl LuaVM {
             }
             Instruction::Pow(a, b, c) => {
                 // R(A) := RK(B) + RK(C)
-                let b = if b < 256 {
-                    self.get_reg(b)
-                } else {
-                    unimplemented!("FIXME: adding constants not implemented")
-                };
-                let c = if c < 256 {
-                    self.get_reg(c)
-                } else {
-                    unimplemented!("FIXME: adding constants not implemented")
-                };
+                let (b, c) = (self.get_rk(b), self.get_rk(c));
                 self.set_reg(a, b.pow(c));
             }
             Instruction::TailCall(a, b, c) => {
@@ -625,16 +571,7 @@ impl LuaVM {
             }
             Instruction::Sub(a, b, c) => {
                 // R(A) := RK(B) - RK(C)
-                let b = if b < 256 {
-                    self.get_reg(b)
-                } else {
-                    unimplemented!("FIXME: adding constants not implemented")
-                };
-                let c = if c < 256 {
-                    self.get_reg(c)
-                } else {
-                    unimplemented!("FIXME: adding constants not implemented")
-                };
+                let (b, c) = (self.get_rk(b), self.get_rk(c));
                 self.set_reg(a, b - c);
             }
             Instruction::Unm(a, b) => {
