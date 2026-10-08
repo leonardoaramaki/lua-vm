@@ -1,4 +1,4 @@
-use lua_vm::Lua;
+use lua_vm::{Lua, LuaValue};
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();

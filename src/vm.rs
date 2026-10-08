@@ -40,6 +40,7 @@ pub enum Instruction {
     SetTable(A, B, C),
     Sub(A, B, C),
     TailCall(A, B, C),
+    Test(A, C),
     Unm(A, B),
 }
 
@@ -160,6 +161,7 @@ impl LuaVM {
             22 => Instruction::Jmp(sbx),
             23 => Instruction::Eq(a, b, c),
             24 => Instruction::Lt(a, b, c),
+            26 => Instruction::Test(a, c),
             28 => Instruction::Call(a, b, c),
             29 => Instruction::TailCall(a, b, c),
             30 => Instruction::Return(a, b),
@@ -330,7 +332,9 @@ impl LuaVM {
                         .borrow_mut()
                         .globals
                         .get(&key)
-                        .expect("Not a valid global")
+                        .unwrap_or_else(|| {
+                            panic!("attempt to index global '{}' (a nil value)", key)
+                        })
                         .clone();
                     self.set_reg(a, env);
                 }
@@ -521,6 +525,17 @@ impl LuaVM {
                         self.callstack.push_front(closure);
                     }
                     _ => panic!("TAILCALL: R(A) is not a valid function"),
+                }
+            }
+            Instruction::Test(a, c) => {
+                let coerced_a = match self.get_reg(a) {
+                    LuaValue::Boolean(b) => b,
+                    LuaValue::Nil => false,
+                    _ => true,
+                };
+                let boolean_c = c == 1;
+                if coerced_a != boolean_c {
+                    self.get_closure_mut().pc += 1;
                 }
             }
             Instruction::Return(a, b) => {
