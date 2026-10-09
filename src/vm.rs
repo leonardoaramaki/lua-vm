@@ -27,6 +27,7 @@ pub enum Instruction {
     Lt(A, B, C),
     LoadBool(A, B, C),
     Loadk(A, Bx),
+    LoadNil(A, B),
     Mod(A, B, C),
     Move(A, Bx),
     Mul(A, B, C),
@@ -142,6 +143,7 @@ impl LuaVM {
             0 => Instruction::Move(a, b),
             1 => Instruction::Loadk(a, bx),
             2 => Instruction::LoadBool(a, b, c),
+            3 => Instruction::LoadNil(a, b),
             5 => Instruction::GetGlobal(a, bx),
             6 => Instruction::GetTable(a, b, c),
             7 => Instruction::SetGlobal(a, bx),
@@ -386,6 +388,11 @@ impl LuaVM {
             Instruction::Loadk(a, bx) => {
                 // R(A) := Kst(Bx)
                 self.set_reg(a, self.get_closure().proto.constants()[bx as usize].clone());
+            }
+            Instruction::LoadNil(a, b) => {
+                for i in a..=b as u8 {
+                    self.set_reg(i, LuaValue::Nil);
+                }
             }
             Instruction::Mul(a, b, c) => {
                 // R(A) := RK(B) * RK(C)
