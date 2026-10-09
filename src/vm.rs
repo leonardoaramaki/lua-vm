@@ -24,6 +24,7 @@ pub enum Instruction {
     GetTable(A, B, C),
     Jmp(SBx),
     Len(A, B),
+    Le(A, B, C),
     Lt(A, B, C),
     LoadBool(A, B, C),
     Loadk(A, Bx),
@@ -163,6 +164,7 @@ impl LuaVM {
             22 => Instruction::Jmp(sbx),
             23 => Instruction::Eq(a, b, c),
             24 => Instruction::Lt(a, b, c),
+            25 => Instruction::Le(a, b, c),
             26 => Instruction::Test(a, c),
             28 => Instruction::Call(a, b, c),
             29 => Instruction::TailCall(a, b, c),
@@ -368,6 +370,13 @@ impl LuaVM {
                     _ => unimplemented!(),
                 };
                 self.set_reg(a, LuaValue::Number(l as f64));
+            }
+            Instruction::Le(a, b, c) => {
+                let (b, c) = (self.get_rk(b), self.get_rk(c));
+                let a = a == 1;
+                if (b <= c) != a {
+                    self.get_closure_mut().pc += 1;
+                }
             }
             Instruction::Lt(a, b, c) => {
                 // if ((RK(B) == RK(C)) ~= A) then PC++
