@@ -1,4 +1,7 @@
-use crate::{proto::Proto, value::LuaValue};
+use crate::{
+    proto::Proto,
+    value::{LuaFunc, LuaValue},
+};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 /// env is where the globals table lives (G_)
@@ -13,8 +16,10 @@ impl Env {
     }
 }
 
+/// One activation record on the call stack.
 pub struct LuaClosure {
     pub pc: i32,
+    pub func: Rc<LuaFunc>,
     pub proto: Rc<Proto>,
     pub env: Rc<RefCell<Env>>,
     pub base: usize,
@@ -22,10 +27,11 @@ pub struct LuaClosure {
 }
 
 impl LuaClosure {
-    pub fn new(proto: Rc<Proto>) -> Self {
+    pub fn new(func: Rc<LuaFunc>) -> Self {
         Self {
             pc: 0,
-            proto,
+            proto: func.proto.clone(),
+            func,
             env: Rc::new(RefCell::new(Env::default())),
             base: 0,
             nresults: -1,

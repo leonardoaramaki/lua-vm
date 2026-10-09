@@ -36,6 +36,12 @@ pub struct FunctionBlock {
     pub constants: Vec<LuaValue>,
     pub instructions: Vec<u32>,
     pub protos: Vec<FunctionBlock>,
+    pub num_upvalues: u8,
+    pub num_params: u8,
+    pub max_stack_size: u8,
+    pub source: String,
+    /// Source line of each instruction.
+    pub line_info: Vec<u32>,
 }
 
 impl FunctionBlock {
@@ -48,6 +54,7 @@ impl FunctionBlock {
             constants,
             instructions,
             protos,
+            ..Default::default()
         }
     }
 }
@@ -92,16 +99,26 @@ impl<R: Read> Chunk<R> {
         Ok(())
     }
 
-    fn read_function_block(&mut self) -> anyhow::Result<FunctionBlock> {
-        let _source_name = self.read_string()?;
+    fn read_function_block(&mut self, parent_source: &str) -> anyhow::Result<FunctionBlock> {
+        // Nested functions leave the source empty when it is the same as their parent's.
+        let mut source = self.read_string()?;
+        if source.is_empty() {
+            source = parent_source.to_string();
+        }
         let _line_defined = self.read_integer()?;
         let _last_line_defined = self.read_integer()?;
-        let _num_of_upvalues = self.read_byte()?;
-        let _num_of_parameters = self.read_byte()?;
+        let num_upvalues = self.read_byte()?;
+        let num_params = self.read_byte()?;
         let _is_vararg = self.read_byte()?;
-        let _max_stack_size = self.read_byte()?;
+        let max_stack_size = self.read_byte()?;
 
-        let mut function = FunctionBlock::default();
+        let mut function = FunctionBlock {
+            num_upvalues,
+            num_params,
+            max_stack_size,
+            source: source.trim_start_matches(['@', '=']).to_string(),
+            ..Default::default()
+        };
         // Instruction list
         let sizecode = self.read_integer()?;
         for _ in 0..sizecode {
@@ -134,8 +151,26 @@ impl<R: Read> Chunk<R> {
 
         let sizep = self.read_integer()?;
         for _ in 0..sizep {
-            let proto = self.read_function_block()?;
+            let proto = self.read_function_block(&source)?;
             function.protos.push(proto);
+        }
+
+        // Debug info. Only line numbers are kept (for error messages), but all of
+        // it sits between sibling protos, so it must be consumed.
+        let sizelineinfo = self.read_integer()?;
+        for _ in 0..sizelineinfo {
+            let line = self.read_integer()?;
+            function.line_info.push(line as u32);
+        }
+        let sizelocvars = self.read_integer()?;
+        for _ in 0..sizelocvars {
+            self.read_string()?;
+            self.read_integer()?; // startpc
+            self.read_integer()?; // endpc
+        }
+        let sizeupvalues = self.read_integer()?;
+        for _ in 0..sizeupvalues {
+            self.read_string()?;
         }
 
         Ok(function)
@@ -143,7 +178,7 @@ impl<R: Read> Chunk<R> {
 
     pub fn load(&mut self) -> anyhow::Result<FunctionBlock> {
         self.read_header_block()?;
-        self.read_function_block()
+        self.read_function_block("?")
     }
 
     pub fn read_bytes(&mut self, n: usize) -> io::Result<Vec<u8>> {

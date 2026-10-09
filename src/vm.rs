@@ -1,8 +1,10 @@
 use crate::closure::{Env, LuaClosure};
-use crate::proto::*;
-use crate::value::LuaValue;
-use std::collections::HashMap;
-use std::{cell::RefCell, collections::VecDeque, rc::Rc};
+use crate::value::{LuaFunc, LuaValue, Upval, format_number};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, VecDeque},
+    rc::Rc,
+};
 
 pub type A = u8;
 pub type B = u32;
@@ -10,15 +12,20 @@ pub type C = u32;
 pub type Bx = u32;
 pub type SBx = i32;
 
+/// Lua 5.1 flushes table constructors to SETLIST in batches of this size.
+const FIELDS_PER_FLUSH: usize = 50;
+
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum Instruction {
     Add(A, B, C),
     Call(A, B, C),
+    Close(A),
     Concat(A, B, C),
     Closure(A, Bx),
     Div(A, B, C),
     Eq(A, B, C),
     GetGlobal(A, Bx),
+    GetUpval(A, B),
     ForLoop(A, SBx),
     ForPrep(A, SBx),
     GetTable(A, B, C),
@@ -40,37 +47,51 @@ pub enum Instruction {
     SetGlobal(A, Bx),
     SetList(A, B, C),
     SetTable(A, B, C),
+    SetUpval(A, B),
     Sub(A, B, C),
     TailCall(A, B, C),
     Test(A, C),
+    TestSet(A, B, C),
+    TForLoop(A, C),
     Unm(A, B),
 }
 
 pub struct LuaVM {
     pub callstack: VecDeque<LuaClosure>,
-    pub protos: Vec<Rc<Proto>>,
     pub env: Rc<RefCell<Env>>,
     pub stack: VecDeque<LuaValue>,
     pub top: usize,
+    /// Upvalues that still point into the stack, shared by every closure that
+    /// captured the same local.
+    open_upvals: Vec<Rc<RefCell<Upval>>>,
 }
 
 impl LuaVM {
     pub fn new() -> Self {
         Self {
             callstack: VecDeque::new(),
-            protos: vec![],
             env: Rc::new(RefCell::new(Env::default())),
             stack: vec![LuaValue::Nil; 1000].into(),
             top: 0,
+            open_upvals: vec![],
         }
+    }
+
+    fn ensure_stack(&mut self, size: usize) {
+        if self.stack.len() < size {
+            self.stack.resize(size, LuaValue::Nil);
+        }
+    }
+
+    fn base(&self) -> usize {
+        self.get_closure().base
     }
 
     fn set_reg<T>(&mut self, index: T, value: LuaValue)
     where
         T: Into<usize>,
     {
-        let closure = self.callstack.front_mut().unwrap();
-        let base: usize = closure.base;
+        let base = self.base();
         self.stack[base + index.into()] = value;
     }
 
@@ -79,8 +100,7 @@ impl LuaVM {
         T: TryInto<usize>,
     {
         let index = index.try_into().ok().unwrap();
-        let closure = self.callstack.front().unwrap();
-        let base: usize = closure.base;
+        let base = self.base();
         self.stack[base + index].clone()
     }
 
@@ -92,37 +112,116 @@ impl LuaVM {
         self.callstack.front_mut().unwrap()
     }
 
+    /// Calls `func` with `args` and returns all of its results. Works both from
+    /// the host (empty call stack) and from inside a running instruction.
     pub fn call(&mut self, func: LuaValue, args: &[LuaValue]) -> anyhow::Result<Vec<LuaValue>> {
-        match func {
-            LuaValue::Function(f) => f(args),
-            LuaValue::LuaFunction(proto) => {
-                let func_slot = 0;
-                let base = func_slot + 1;
-                self.stack[func_slot] = LuaValue::LuaFunction(proto.clone());
-                for (i, arg) in args.iter().enumerate() {
-                    self.stack[base + i] = arg.clone();
-                }
-                self.top = base + args.len();
-                let mut closure = LuaClosure::new(proto);
-                closure.env = self.env.clone();
-                closure.base = base;
-                closure.nresults = 0;
-                self.callstack.push_front(closure);
-                while self.step().is_some() {}
-                Ok(vec![])
-            }
-            _other => anyhow::bail!("attempt to call an invalid value"),
-        }
+        // Place the call above everything the current frame may be using.
+        let at = match self.callstack.front() {
+            Some(frame) => frame.base + frame.proto.max_stack_size as usize,
+            None => 0,
+        };
+        self.call_at(at, func, args)
     }
 
-    pub fn load_proto(&mut self, proto: Proto) {
-        let proto = Rc::new(proto);
-        self.protos.push(proto.clone());
-        let mut main = LuaClosure::new(proto.clone());
-        main.base = 1;
-        main.env = self.env.clone();
-        self.stack[0] = LuaValue::LuaFunction(proto);
-        self.callstack.push_back(main);
+    fn call_at(
+        &mut self,
+        at: usize,
+        func: LuaValue,
+        args: &[LuaValue],
+    ) -> anyhow::Result<Vec<LuaValue>> {
+        self.ensure_stack(at + args.len() + 1);
+        self.stack[at] = func;
+        for (i, arg) in args.iter().enumerate() {
+            self.stack[at + 1 + i] = arg.clone();
+        }
+        let depth = self.callstack.len();
+        let result = self.precall(at, args.len(), -1).and_then(|()| {
+            while self.callstack.len() > depth {
+                self.step()?;
+            }
+            Ok(())
+        });
+        if let Err(e) = result {
+            // Drop the frames of the failed call so the VM can be used again.
+            while self.callstack.len() > depth {
+                let frame = self.callstack.pop_front().unwrap();
+                self.close_upvals(frame.base);
+            }
+            return Err(e);
+        }
+        Ok(self.stack.range(at..self.top).cloned().collect())
+    }
+
+    /// Starts a call to the function in `stack[func]` whose `nargs` arguments
+    /// follow it. Native functions run to completion here and leave their results
+    /// starting at `func`; Lua functions get a new frame that `step` then runs.
+    fn precall(&mut self, func: usize, nargs: usize, nresults: i32) -> anyhow::Result<()> {
+        match self.stack[func].clone() {
+            LuaValue::Function(function) => {
+                let args: Vec<LuaValue> =
+                    self.stack.range(func + 1..func + 1 + nargs).cloned().collect();
+                let result = function(&args)?;
+                if nresults < 0 {
+                    // Caller wants "all results".
+                    self.ensure_stack(func + result.len() + 1);
+                    for (i, value) in result.iter().enumerate() {
+                        self.stack[func + i] = value.clone();
+                    }
+                    self.top = func + result.len();
+                } else {
+                    // Caller wants exactly nresults results in R(A), R(A + 1), ...
+                    for i in 0..nresults as usize {
+                        self.stack[func + i] = result.get(i).cloned().unwrap_or(LuaValue::Nil);
+                    }
+                }
+            }
+            LuaValue::LuaFunction(lua_function) => {
+                let base = func + 1;
+                let num_params = lua_function.proto.num_params as usize;
+                let max_stack = lua_function.proto.max_stack_size as usize;
+                self.ensure_stack(base + max_stack.max(nargs) + 1);
+                // Missing parameters, extra arguments and the remaining registers
+                // all start out as nil, like luaD_precall does.
+                for i in nargs.min(num_params)..max_stack {
+                    self.stack[base + i] = LuaValue::Nil;
+                }
+                let mut closure = LuaClosure::new(lua_function);
+                closure.env = self.env.clone();
+                closure.base = base;
+                closure.nresults = nresults;
+                self.callstack.push_front(closure);
+            }
+            other => anyhow::bail!("attempt to call a {} value", other.type_name()),
+        }
+        Ok(())
+    }
+
+    /// Returns the open upvalue for stack slot `slot`, creating it if needed.
+    fn find_upval(&mut self, slot: usize) -> Rc<RefCell<Upval>> {
+        for upval in &self.open_upvals {
+            if matches!(*upval.borrow(), Upval::Open(i) if i == slot) {
+                return upval.clone();
+            }
+        }
+        let upval = Rc::new(RefCell::new(Upval::Open(slot)));
+        self.open_upvals.push(upval.clone());
+        upval
+    }
+
+    /// Moves every open upvalue at or above stack slot `level` off the stack.
+    fn close_upvals(&mut self, level: usize) {
+        let stack = &self.stack;
+        self.open_upvals.retain(|upval| {
+            let slot = match *upval.borrow() {
+                Upval::Open(i) => i,
+                Upval::Closed(_) => return false,
+            };
+            if slot < level {
+                return true;
+            }
+            *upval.borrow_mut() = Upval::Closed(stack[slot].clone());
+            false
+        });
     }
 
     pub fn fetch(&mut self) -> u32 {
@@ -132,7 +231,7 @@ impl LuaVM {
         closure.proto.bytecode()[pc as usize]
     }
 
-    pub fn decode(&self, instruction: u32) -> Instruction {
+    pub fn decode(&self, instruction: u32) -> anyhow::Result<Instruction> {
         let a = ((instruction >> 6) & 0xFF) as u8;
         let b = (instruction >> 23) & 0x1FF;
         let c = (instruction >> 14) & 0x1FF;
@@ -140,14 +239,16 @@ impl LuaVM {
         // TODO: put 131071 into a constant MAXARG_SBX
         let sbx: i32 = (bx as i32) - 131071;
         let opcode = instruction & 0x3F;
-        match opcode {
+        Ok(match opcode {
             0 => Instruction::Move(a, b),
             1 => Instruction::Loadk(a, bx),
             2 => Instruction::LoadBool(a, b, c),
             3 => Instruction::LoadNil(a, b),
+            4 => Instruction::GetUpval(a, b),
             5 => Instruction::GetGlobal(a, bx),
             6 => Instruction::GetTable(a, b, c),
             7 => Instruction::SetGlobal(a, bx),
+            8 => Instruction::SetUpval(a, b),
             9 => Instruction::SetTable(a, b, c),
             10 => Instruction::NewTable(a, b, c),
             11 => Instruction::SelfOp(a, b, c),
@@ -166,15 +267,19 @@ impl LuaVM {
             24 => Instruction::Lt(a, b, c),
             25 => Instruction::Le(a, b, c),
             26 => Instruction::Test(a, c),
+            27 => Instruction::TestSet(a, b, c),
             28 => Instruction::Call(a, b, c),
             29 => Instruction::TailCall(a, b, c),
             30 => Instruction::Return(a, b),
             31 => Instruction::ForLoop(a, sbx),
             32 => Instruction::ForPrep(a, sbx),
+            33 => Instruction::TForLoop(a, c),
             34 => Instruction::SetList(a, b, c),
+            35 => Instruction::Close(a),
             36 => Instruction::Closure(a, bx),
-            _ => unimplemented!("{}", opcode),
-        }
+            37 => anyhow::bail!("VARARG (...) is not supported"),
+            _ => anyhow::bail!("unknown opcode {}", opcode),
+        })
     }
 
     fn decode_fpb(fpb: u32) -> (u32, u32) {
@@ -190,7 +295,26 @@ impl LuaVM {
         }
     }
 
-    pub fn execute(&mut self, instruction: Instruction) {
+    /// Applies an arithmetic operator, coercing numeric strings like Lua does.
+    fn arith(
+        &mut self,
+        b: LuaValue,
+        c: LuaValue,
+        op: impl Fn(f64, f64) -> f64,
+    ) -> anyhow::Result<LuaValue> {
+        let to_number = |v: &LuaValue| match v {
+            LuaValue::Number(n) => Some(*n),
+            LuaValue::String(s) => s.trim().parse().ok(),
+            _ => None,
+        };
+        match (to_number(&b), to_number(&c)) {
+            (Some(x), Some(y)) => Ok(LuaValue::Number(op(x, y))),
+            (None, _) => anyhow::bail!("attempt to perform arithmetic on a {} value", b.type_name()),
+            _ => anyhow::bail!("attempt to perform arithmetic on a {} value", c.type_name()),
+        }
+    }
+
+    pub fn execute(&mut self, instruction: Instruction) -> anyhow::Result<()> {
         match instruction {
             Instruction::Move(a, b) => {
                 // R(A) := R(B)
@@ -200,62 +324,54 @@ impl LuaVM {
             Instruction::Add(a, b, c) => {
                 // R(A) := RK(B) + RK(C)
                 let (b, c) = (self.get_rk(b), self.get_rk(c));
-                self.set_reg(a, LuaValue::sum(&b, &c));
+                let v = self.arith(b, c, |x, y| x + y)?;
+                self.set_reg(a, v);
             }
             Instruction::Call(a, b, c) => {
-                let func = self.get_closure().base + a as usize;
+                let func = self.base() + a as usize;
                 let nargs = if b == 0 {
                     self.top - (func + 1)
                 } else {
                     b as usize - 1
                 };
-                let nresults = c as i32 - 1;
-                match self.get_reg(a) {
-                    LuaValue::Function(function) => {
-                        let args: Vec<LuaValue> = self
-                            .stack
-                            .range(func + 1..func + 1 + nargs)
-                            .cloned()
-                            .collect();
-                        let result = function(&args).unwrap();
-                        if c == 0 {
-                            // Caller wants "all results".
-                            result
-                                .iter()
-                                .enumerate()
-                                .for_each(|x| self.stack[func + x.0] = x.1.clone());
-
-                            self.top = func + result.len();
-                        } else {
-                            // Caller wants exactly c - 1 results in R(A), R(A + 1), ...
-                            for i in 0..nresults as usize {
-                                self.stack[func + i] =
-                                    result.get(i).cloned().unwrap_or(LuaValue::Nil);
-                            }
-                        }
-                    }
-                    LuaValue::LuaFunction(lua_function) => {
-                        let mut closure = LuaClosure::new(lua_function);
-                        closure.env = self.env.clone();
-                        closure.base = func + 1;
-                        closure.nresults = nresults;
-                        self.callstack.push_front(closure);
-                    }
-                    other => panic!("CALL: attempt to call a {} value", other),
-                }
+                self.precall(func, nargs, c as i32 - 1)?;
+            }
+            Instruction::Close(a) => {
+                // close all upvalues >= R(A)
+                let level = self.base() + a as usize;
+                self.close_upvals(level);
             }
             Instruction::Closure(a, bx) => {
                 // Bx is the function number of the function to be instantiated in the table of function prototypes
-                let proto = self.get_closure().proto.protos().get(bx as usize).unwrap();
-                self.set_reg(a, LuaValue::LuaFunction(proto.clone()));
+                let proto = self.get_closure().proto.protos()[bx as usize].clone();
+                // Each upvalue is described by a pseudo-instruction after CLOSURE:
+                // MOVE 0 B captures local R(B), GETUPVAL 0 B shares our upvalue B.
+                let mut upvals = Vec::with_capacity(proto.num_upvalues as usize);
+                for _ in 0..proto.num_upvalues {
+                    let pseudo = self.fetch();
+                    let b = ((pseudo >> 23) & 0x1FF) as usize;
+                    match pseudo & 0x3F {
+                        0 => {
+                            let slot = self.base() + b;
+                            upvals.push(self.find_upval(slot));
+                        }
+                        4 => upvals.push(self.get_closure().func.upvals[b].clone()),
+                        op => anyhow::bail!("CLOSURE: unexpected upvalue opcode {}", op),
+                    }
+                }
+                self.set_reg(a, LuaValue::LuaFunction(Rc::new(LuaFunc { proto, upvals })));
             }
             Instruction::Concat(a, b, c) => {
                 // R(A) := R(B) .... R(C)
                 assert!(c >= b);
                 let mut result = String::new();
                 for i in b..=c {
-                    if let LuaValue::String(string) = self.get_reg(i as usize) {
-                        result.push_str(&string);
+                    match self.get_reg(i as usize) {
+                        LuaValue::String(string) => result.push_str(&string),
+                        LuaValue::Number(n) => result.push_str(&format_number(n)),
+                        other => {
+                            anyhow::bail!("attempt to concatenate a {} value", other.type_name())
+                        }
                     }
                 }
                 self.set_reg(a, LuaValue::String(result));
@@ -263,7 +379,8 @@ impl LuaVM {
             Instruction::Div(a, b, c) => {
                 // R(A) := RK(B) / RK(C)
                 let (b, c) = (self.get_rk(b), self.get_rk(c));
-                self.set_reg(a, b / c);
+                let v = self.arith(b, c, |x, y| x / y)?;
+                self.set_reg(a, v);
             }
             Instruction::Eq(a, b, c) => {
                 // if ((RK(B) == RK(C)) ~= A) then PC++
@@ -277,13 +394,10 @@ impl LuaVM {
             Instruction::ForPrep(a, sbx) => {
                 // Initial value
                 let initial = self.get_reg(a);
-                // Limit
-                let _limit = self.get_reg(a + 1);
                 // Step
                 let step = self.get_reg(a + 2);
-                // Loop Variable
-                let _loop_var = self.get_reg(a + 3);
-                self.set_reg(a, initial - step);
+                let v = self.arith(initial, step, |x, y| x - y)?;
+                self.set_reg(a, v);
                 self.get_closure_mut().pc += sbx;
             }
             Instruction::ForLoop(a, sbx) => {
@@ -291,7 +405,8 @@ impl LuaVM {
                 let limit = self.get_reg(a + 1);
                 // Step
                 let step = self.get_reg(a + 2);
-                let next = self.get_reg(a) + step.clone();
+                let index = self.get_reg(a);
+                let next = self.arith(index, step.clone(), |x, y| x + y)?;
                 self.set_reg(a, next.clone());
                 let continue_loop = match step {
                     LuaValue::Number(n) => {
@@ -301,7 +416,7 @@ impl LuaVM {
                             next >= limit
                         }
                     }
-                    other => panic!("'for' step must be a number, got, {}", other),
+                    other => anyhow::bail!("'for' step must be a number, got {}", other),
                 };
                 if continue_loop {
                     self.get_closure_mut().pc += sbx;
@@ -310,65 +425,33 @@ impl LuaVM {
             }
             Instruction::GetGlobal(a, bx) => {
                 // R(A) := Glb(Kst(Bx))
-                let closure = self.get_closure();
-                let proto = closure.proto.clone();
-                if let LuaValue::String(key) = proto.constants()[bx as usize].clone() {
-                    let env = self
-                        .env
-                        .borrow_mut()
-                        .globals
-                        .get(&key)
-                        .unwrap_or_else(|| {
-                            panic!("attempt to index global '{}' (a nil value)", key)
-                        })
-                        .clone();
-                    self.set_reg(a, env);
+                let key = self.get_closure().proto.constants()[bx as usize].clone();
+                if let LuaValue::String(key) = key {
+                    let value = self.env.borrow().globals.get(&key).cloned();
+                    self.set_reg(a, value.unwrap_or(LuaValue::Nil));
                 }
             }
             Instruction::GetTable(a, b, c) => {
-                if let LuaValue::Table(_, h) = self.get_reg(b) {
-                    let c = if c < 256 {
-                        self.get_reg(c)
-                    } else {
-                        let constants = self.get_closure().proto.constants();
-                        constants[c as usize % 256].clone()
-                    };
-
-                    // C is the key, so check which type is it
-                    match c {
-                        LuaValue::Number(n) => {
-                            // Assert that B is a table and get that
-                            if let LuaValue::Table(v, h) = self.get_reg(b) {
-                                // Return from the array if within bounds otherwise return from the
-                                // map
-                                if n.fract() == 0.0 && n >= 1.0 && n <= v.borrow().len() as f64 {
-                                    self.set_reg(a, v.borrow()[n as usize - 1].clone());
-                                } else {
-                                    self.set_reg(
-                                        a,
-                                        h.borrow().get(&c).unwrap_or(&LuaValue::Nil).clone(),
-                                    );
-                                }
-                            }
-                        }
-                        _ => {
-                            self.set_reg(a, h.borrow().get(&c).unwrap_or(&LuaValue::Nil).clone());
-                        }
-                    }
-                }
+                // R(A) := R(B)[RK(C)]
+                let table = self.get_reg(b);
+                let key = self.get_rk(c);
+                let value = table.index(&key)?;
+                self.set_reg(a, value);
+            }
+            Instruction::GetUpval(a, b) => {
+                // R(A) := UpValue[B]
+                let upval = self.get_closure().func.upvals[b as usize].clone();
+                let value = match &*upval.borrow() {
+                    Upval::Open(slot) => self.stack[*slot].clone(),
+                    Upval::Closed(value) => value.clone(),
+                };
+                self.set_reg(a, value);
             }
             Instruction::Jmp(sbx) => {
                 self.get_closure_mut().pc += sbx;
             }
             Instruction::Len(a, b) => {
-                let b = self.get_reg(b);
-                let l = match b {
-                    LuaValue::String(s) => s.len(),
-                    LuaValue::Table(v, _h) => {
-                        v.borrow().iter().filter(|x| **x != LuaValue::Nil).count()
-                    }
-                    _ => unimplemented!(),
-                };
+                let l = self.get_reg(b).len()?;
                 self.set_reg(a, LuaValue::Number(l as f64));
             }
             Instruction::Le(a, b, c) => {
@@ -406,12 +489,14 @@ impl LuaVM {
             Instruction::Mul(a, b, c) => {
                 // R(A) := RK(B) * RK(C)
                 let (b, c) = (self.get_rk(b), self.get_rk(c));
-                self.set_reg(a, b * c);
+                let v = self.arith(b, c, |x, y| x * y)?;
+                self.set_reg(a, v);
             }
             Instruction::Mod(a, b, c) => {
-                // R(A) := RK(B) + RK(C)
+                // R(A) := RK(B) % RK(C), with the sign of the divisor
                 let (b, c) = (self.get_rk(b), self.get_rk(c));
-                self.set_reg(a, b % c);
+                let v = self.arith(b, c, |x, y| x - (x / y).floor() * y)?;
+                self.set_reg(a, v);
             }
             Instruction::NewTable(a, b, c) => {
                 let (be, bm) = Self::decode_fpb(b);
@@ -437,66 +522,56 @@ impl LuaVM {
                 );
             }
             Instruction::Not(a, b) => {
-                if let LuaValue::Boolean(b) = self.get_reg(b) {
-                    self.set_reg(a, !LuaValue::Boolean(b));
-                }
+                let b = self.get_reg(b);
+                self.set_reg(a, !b);
             }
             Instruction::Pow(a, b, c) => {
-                // R(A) := RK(B) + RK(C)
+                // R(A) := RK(B) ^ RK(C)
                 let (b, c) = (self.get_rk(b), self.get_rk(c));
-                self.set_reg(a, b.pow(c));
+                let v = self.arith(b, c, f64::powf)?;
+                self.set_reg(a, v);
             }
-            Instruction::TailCall(a, b, c) => {
-                let base = self.get_closure().base;
-                let func = self.get_closure().base + a as usize;
+            Instruction::TailCall(a, b, _c) => {
+                // Runs as a regular call; the RETURN that follows it hands the
+                // results back to our caller.
+                let func = self.base() + a as usize;
                 let nargs = if b == 0 {
                     self.top - (func + 1)
                 } else {
                     b as usize - 1
                 };
-                let nresults = c as i32 - 1;
-                match self.stack[base + a as usize].clone() {
-                    LuaValue::Function(function) => {
-                        let args: Vec<LuaValue> = self
-                            .stack
-                            .range(func + 1..func + 1 + nargs)
-                            .cloned()
-                            .collect();
-                        let result = function(&args).unwrap();
-                        if c == 0 {
-                            // Caller wants "all results".
-                            result
-                                .iter()
-                                .enumerate()
-                                .for_each(|x| self.stack[func + x.0] = x.1.clone());
-
-                            self.top = func + result.len();
-                        } else {
-                            // Caller wants exactly c - 1 results in R(A), R(A + 1), ...
-                            for i in 0..nresults as usize {
-                                self.stack[func + i] =
-                                    result.get(i).cloned().unwrap_or(LuaValue::Nil);
-                            }
-                        }
-                    }
-                    LuaValue::LuaFunction(function) => {
-                        let base = self.get_closure().base;
-                        let mut closure = LuaClosure::new(function.clone());
-                        closure.env = self.env.clone();
-                        closure.base = base + a as usize + 1;
-                        self.callstack.push_front(closure);
-                    }
-                    _ => panic!("TAILCALL: R(A) is not a valid function"),
-                }
+                self.precall(func, nargs, -1)?;
             }
             Instruction::Test(a, c) => {
-                let coerced_a = match self.get_reg(a) {
-                    LuaValue::Boolean(b) => b,
-                    LuaValue::Nil => false,
-                    _ => true,
-                };
-                let boolean_c = c == 1;
-                if coerced_a != boolean_c {
+                // if not (R(A) <=> C) then pc++
+                if self.get_reg(a).truthy() != (c != 0) {
+                    self.get_closure_mut().pc += 1;
+                }
+            }
+            Instruction::TestSet(a, b, c) => {
+                // if (R(B) <=> C) then R(A) := R(B) else pc++
+                let value = self.get_reg(b);
+                if value.truthy() == (c != 0) {
+                    self.set_reg(a, value);
+                } else {
+                    self.get_closure_mut().pc += 1;
+                }
+            }
+            Instruction::TForLoop(a, c) => {
+                // R(A+3), ..., R(A+2+C) := R(A)(R(A+1), R(A+2));
+                // if R(A+3) ~= nil then R(A+2) = R(A+3) else pc++
+                let ra = self.base() + a as usize;
+                let iterator = self.stack[ra].clone();
+                let args = [self.stack[ra + 1].clone(), self.stack[ra + 2].clone()];
+                let results = self.call_at(ra + 3, iterator, &args)?;
+                for i in 0..c as usize {
+                    self.stack[ra + 3 + i] = results.get(i).cloned().unwrap_or(LuaValue::Nil);
+                }
+                let first = self.stack[ra + 3].clone();
+                if first != LuaValue::Nil {
+                    self.stack[ra + 2] = first;
+                } else {
+                    // Skip the JMP that goes back to the loop body.
                     self.get_closure_mut().pc += 1;
                 }
             }
@@ -508,9 +583,8 @@ impl LuaVM {
                 } else {
                     b as usize - 1
                 };
-                if self.callstack.is_empty() {
-                    return;
-                }
+                // Locals captured by closures must outlive this frame.
+                self.close_upvals(frame.base);
                 let dst = frame.base - 1;
                 for i in 0..n {
                     self.stack[dst + i] = self.stack[first + i].clone();
@@ -526,83 +600,77 @@ impl LuaVM {
                 }
             }
             Instruction::SelfOp(a, b, c) => {
-                let b_value = self.get_reg(b);
-                self.set_reg(a + 1, b_value.clone());
-                let c_value = if c < 256 {
-                    self.get_reg(c)
-                } else {
-                    self.get_closure().proto.constants()[c as usize - 256].clone()
-                };
-                if let LuaValue::Table(_, h) = b_value {
-                    let value = h.borrow().get(&c_value).cloned().unwrap_or(LuaValue::Nil);
-                    self.set_reg(a, value);
-                } else {
-                    panic!("SELF: R(B) is not a table");
-                }
+                // R(A+1) := R(B); R(A) := R(B)[RK(C)]
+                let object = self.get_reg(b);
+                self.set_reg(a + 1, object.clone());
+                let key = self.get_rk(c);
+                let method = object.index(&key)?;
+                self.set_reg(a, method);
             }
             Instruction::SetGlobal(a, bx) => {
                 let ra = self.get_reg(a);
                 let k = self.get_closure().proto.constants()[bx as usize].clone();
                 self.env.borrow_mut().insert_global(&String::from(k), ra);
             }
-            Instruction::SetList(a, b, _c) => {
-                if b > 0 {
-                    for i in a + 1..=(a + b as u8) {
-                        if let LuaValue::Table(vec, _) = self.get_reg(a) {
-                            let v = self.get_reg(i);
-                            vec.borrow_mut().push(v);
-                        }
-                    }
+            Instruction::SetList(a, b, c) => {
+                // R(A)[(C-1)*FPF+i] := R(A+i), 1 <= i <= B
+                let table = self.get_reg(a);
+                let n = if b == 0 {
+                    // Values go up to the top left by a multi-result call.
+                    self.top - (self.base() + a as usize) - 1
                 } else {
-                    unimplemented!("SETLIST: Variable number of arguments");
+                    b as usize
+                };
+                // A batch number too big for C is stored in the next instruction.
+                let c = if c == 0 { self.fetch() } else { c } as usize;
+                let offset = (c - 1) * FIELDS_PER_FLUSH;
+                for i in 1..=n {
+                    let value = self.get_reg(a as usize + i);
+                    table.set_index(LuaValue::Number((offset + i) as f64), value)?;
                 }
             }
             Instruction::SetTable(a, b, c) => {
-                let tbl = self.get_reg(a);
-                let b = if b < 256 {
-                    self.get_reg(b)
-                } else {
-                    let proto = self.get_closure().proto.clone();
-                    let constants = proto.constants();
-                    constants[b as usize % 256].clone()
-                };
-                let c = if c < 256 {
-                    self.get_reg(c)
-                } else {
-                    let proto = self.get_closure().proto.clone();
-                    let constants = proto.constants();
-                    constants[c as usize % 256].clone()
-                };
-                if let LuaValue::Table(v, h) = tbl {
-                    if let LuaValue::Number(n) = b
-                        && n.fract() == 0.0
-                        && n >= 1.0
-                        && n <= v.borrow().len() as f64
-                    {
-                        v.borrow_mut()[n as usize - 1] = c;
-                        return;
-                    }
-                    h.borrow_mut().insert(b, c);
+                // R(A)[RK(B)] := RK(C)
+                let table = self.get_reg(a);
+                let (key, value) = (self.get_rk(b), self.get_rk(c));
+                table.set_index(key, value)?;
+            }
+            Instruction::SetUpval(a, b) => {
+                // UpValue[B] := R(A)
+                let value = self.get_reg(a);
+                let upval = self.get_closure().func.upvals[b as usize].clone();
+                let mut upval = upval.borrow_mut();
+                match &mut *upval {
+                    Upval::Open(slot) => self.stack[*slot] = value,
+                    Upval::Closed(v) => *v = value,
                 }
             }
             Instruction::Sub(a, b, c) => {
                 // R(A) := RK(B) - RK(C)
                 let (b, c) = (self.get_rk(b), self.get_rk(c));
-                self.set_reg(a, b - c);
+                let v = self.arith(b, c, |x, y| x - y)?;
+                self.set_reg(a, v);
             }
             Instruction::Unm(a, b) => {
                 let b = self.get_reg(b);
-                self.set_reg(a, b * LuaValue::Number(-1.0));
+                let v = self.arith(b, LuaValue::Number(0.0), |x, _| -x)?;
+                self.set_reg(a, v);
             }
         }
+        Ok(())
     }
 
-    /// Step next cycle of fetch, decode, execute.
-    /// Returns the processed closure or None otherwise.
-    pub fn step(&mut self) -> Option<&LuaClosure> {
+    /// Runs the next instruction of the current frame. Errors are tagged with
+    /// the source position, so nested calls read like a traceback.
+    pub fn step(&mut self) -> anyhow::Result<()> {
+        let frame = self.get_closure();
+        let (proto, pc) = (frame.proto.clone(), frame.pc as usize);
         let encoded_instruction = self.fetch();
-        let decoded_instruction = self.decode(encoded_instruction);
-        self.execute(decoded_instruction);
-        self.callstack.front()
+        self.decode(encoded_instruction)
+            .and_then(|instruction| self.execute(instruction))
+            .map_err(|e| {
+                let line = proto.line_info.get(pc).copied().unwrap_or(0);
+                e.context(format!("{}:{}", proto.source, line))
+            })
     }
 }
